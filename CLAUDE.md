@@ -3,15 +3,24 @@
 ## Quick Reference
 
 ```bash
+# Setup (from plugins/worktree-v2/)
+uv sync --dev
+
 # Run tests
-uv run --with pytest pytest tests/ -v
+uv run pytest                           # All tests
+uv run pytest scripts/tests/test_models.py -v  # Specific file
+
+# Linting and type checking
+uv run ruff check scripts/
+uv run mypy scripts/ --exclude 'tests/'
 
 # Check Beads status
 bd ready                    # Find unblocked work
+bd show <id>                # Full task details
 bd doctor                   # Check for issues
 
 # Dry-run a workflow
-python scripts/cli/ralph.py --repo /path/to/repo --task "test" --dry-run
+python scripts/cli/worktree.py --repo /path/to/repo --task "test" --dry-run
 ```
 
 ## Project Overview
