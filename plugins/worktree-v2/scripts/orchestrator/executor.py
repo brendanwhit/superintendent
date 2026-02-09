@@ -1,7 +1,5 @@
 """Executor: runs a WorkflowPlan step by step, managing state transitions."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -13,7 +11,7 @@ from state.workflow import WORKFLOW_ORDER, WorkflowState, valid_transition
 class StepHandler(Protocol):
     """Protocol for step execution handlers."""
 
-    def execute(self, step: WorkflowStep) -> StepResult: ...
+    def execute(self, step: WorkflowStep) -> "StepResult": ...
 
 
 @dataclass
