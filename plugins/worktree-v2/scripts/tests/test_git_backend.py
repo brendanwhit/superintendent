@@ -9,6 +9,9 @@ from backends.git import (
     GitBackend,
     MockGitBackend,
     RealGitBackend,
+    _extract_repo_name,
+    _find_local_clone,
+    _is_git_repo,
 )
 
 
@@ -264,6 +267,83 @@ class TestRealGitBackend:
         assert result is True
         assert worktree_path.exists()
 
+    def test_ensure_local_finds_clone_one_level_deep(self, tmp_path):
+        """When a URL is given, find a clone nested one level under a search path."""
+        # Create search_path/projects/my-repo/.git
+        projects = tmp_path / "projects"
+        projects.mkdir()
+        repo_dir = projects / "my-repo"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        backend = RealGitBackend(search_paths=[tmp_path])
+        result = backend.ensure_local("https://github.com/user/my-repo.git")
+        assert result == repo_dir
+
+    def test_ensure_local_custom_search_paths(self, tmp_path):
+        """Custom search_paths are used instead of defaults."""
+        search1 = tmp_path / "search1"
+        search2 = tmp_path / "search2"
+        search1.mkdir()
+        search2.mkdir()
+        repo_dir = search2 / "target-repo"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        backend = RealGitBackend(search_paths=[search1, search2])
+        result = backend.ensure_local("https://github.com/org/target-repo")
+        assert result == repo_dir
+
+    def test_ensure_local_prefers_direct_child_over_nested(self, tmp_path):
+        """Direct child match is found before one-level-deep match."""
+        # Direct: tmp_path/my-repo/.git
+        direct = tmp_path / "my-repo"
+        direct.mkdir()
+        (direct / ".git").mkdir()
+
+        # Nested: tmp_path/subdir/my-repo/.git
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        nested = subdir / "my-repo"
+        nested.mkdir()
+        (nested / ".git").mkdir()
+
+        backend = RealGitBackend(search_paths=[tmp_path])
+        result = backend.ensure_local("https://github.com/user/my-repo")
+        assert result == direct
+
+    def test_ensure_local_skips_dotdirs_in_search(self, tmp_path):
+        """Hidden directories (starting with .) are skipped during search."""
+        hidden = tmp_path / ".hidden"
+        hidden.mkdir()
+        repo_dir = hidden / "my-repo"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        backend = RealGitBackend(search_paths=[tmp_path])
+        result = backend.ensure_local("https://github.com/user/my-repo")
+        assert result is None
+
+    def test_ensure_local_strips_trailing_slash_from_url(self, tmp_path):
+        """URL with trailing slash is handled correctly."""
+        repo_dir = tmp_path / "my-repo"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        backend = RealGitBackend(search_paths=[tmp_path])
+        result = backend.ensure_local("https://github.com/user/my-repo/")
+        assert result == repo_dir
+
+    def test_ensure_local_strips_dot_git_from_url(self, tmp_path):
+        """URL ending in .git is handled correctly."""
+        repo_dir = tmp_path / "my-repo"
+        repo_dir.mkdir()
+        (repo_dir / ".git").mkdir()
+
+        backend = RealGitBackend(search_paths=[tmp_path])
+        result = backend.ensure_local("git@github.com:user/my-repo.git")
+        assert result == repo_dir
+
     @pytest.mark.integration
     def test_fetch_on_local_repo(self, tmp_path):
         """Integration test: fetch on a local repo."""
@@ -276,3 +356,80 @@ class TestRealGitBackend:
         # fetch --all on a repo with no remotes still returns 0
         result = backend.fetch(repo_path)
         assert result is True
+
+
+class TestHelperFunctions:
+    """Test helper functions used by RealGitBackend."""
+
+    def test_extract_repo_name_https(self):
+        assert _extract_repo_name("https://github.com/user/my-repo") == "my-repo"
+
+    def test_extract_repo_name_https_dot_git(self):
+        assert _extract_repo_name("https://github.com/user/my-repo.git") == "my-repo"
+
+    def test_extract_repo_name_ssh(self):
+        assert _extract_repo_name("git@github.com:user/my-repo.git") == "my-repo"
+
+    def test_extract_repo_name_trailing_slash(self):
+        assert _extract_repo_name("https://github.com/user/my-repo/") == "my-repo"
+
+    def test_extract_repo_name_plain_name(self):
+        assert _extract_repo_name("my-repo") == "my-repo"
+
+    def test_is_git_repo_true(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        assert _is_git_repo(repo) is True
+
+    def test_is_git_repo_no_git_dir(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        assert _is_git_repo(repo) is False
+
+    def test_is_git_repo_nonexistent(self, tmp_path):
+        assert _is_git_repo(tmp_path / "nonexistent") is False
+
+    def test_find_local_clone_direct_child(self, tmp_path):
+        repo = tmp_path / "my-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        assert _find_local_clone("my-repo", [tmp_path]) == repo
+
+    def test_find_local_clone_one_level_deep(self, tmp_path):
+        subdir = tmp_path / "projects"
+        subdir.mkdir()
+        repo = subdir / "my-repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        assert _find_local_clone("my-repo", [tmp_path]) == repo
+
+    def test_find_local_clone_not_found(self, tmp_path):
+        assert _find_local_clone("no-such-repo", [tmp_path]) is None
+
+    def test_find_local_clone_skips_nonexistent_search_path(self, tmp_path):
+        result = _find_local_clone("repo", [tmp_path / "nonexistent"])
+        assert result is None
+
+    def test_find_local_clone_multiple_search_paths(self, tmp_path):
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        repo = second / "target"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        assert _find_local_clone("target", [first, second]) == repo
+
+    def test_find_local_clone_prefers_earlier_search_path(self, tmp_path):
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        repo1 = first / "target"
+        repo1.mkdir()
+        (repo1 / ".git").mkdir()
+        repo2 = second / "target"
+        repo2.mkdir()
+        (repo2 / ".git").mkdir()
+        assert _find_local_clone("target", [first, second]) == repo1

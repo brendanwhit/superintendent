@@ -14,6 +14,44 @@ def _extract_repo_name(url: str) -> str:
     return name
 
 
+def _is_git_repo(path: Path) -> bool:
+    """Check if a path is a git repository."""
+    return path.is_dir() and (path / ".git").exists()
+
+
+def _find_local_clone(repo_name: str, search_paths: list[Path]) -> Path | None:
+    """Search for a local git clone matching repo_name.
+
+    Checks each search path directly (search_path/repo_name) and one level
+    deeper (search_path/*/repo_name) to cover layouts like ~/projects/repo_name.
+    """
+    for search_path in search_paths:
+        if not search_path.is_dir():
+            continue
+
+        # Direct child: search_path/repo_name
+        candidate = search_path / repo_name
+        if _is_git_repo(candidate):
+            return candidate
+
+        # One level deeper: search_path/*/repo_name
+        try:
+            for child in search_path.iterdir():
+                if child.is_dir() and not child.name.startswith("."):
+                    candidate = child / repo_name
+                    if _is_git_repo(candidate):
+                        return candidate
+        except PermissionError:
+            continue
+
+    return None
+
+
+def _default_search_paths() -> list[Path]:
+    """Compute default search paths lazily so CWD is evaluated at call time."""
+    return [Path.cwd(), Path.home()]
+
+
 @runtime_checkable
 class GitBackend(Protocol):
     """Protocol for git operations."""
@@ -31,6 +69,9 @@ class GitBackend(Protocol):
 
 class RealGitBackend:
     """Executes actual git commands via subprocess."""
+
+    def __init__(self, search_paths: list[Path] | None = None) -> None:
+        self._search_paths = search_paths
 
     def clone(self, url: str, path: Path) -> bool:
         result = subprocess.run(
@@ -67,21 +108,19 @@ class RealGitBackend:
     def ensure_local(self, repo: str | None) -> Path | None:
         """Ensure repo is available locally. Clone if URL, validate if path.
 
-        For URLs, parses out the repo name and checks if a local clone
-        exists in the current working directory.
+        For URLs, parses out the repo name and searches CWD, home directory,
+        and common subdirectories (one level deep) for an existing clone.
         """
         if repo is None:
             return None
 
         if repo.startswith(("https://", "http://", "git@")):
             repo_name = _extract_repo_name(repo)
-            candidate = Path.cwd() / repo_name
-            if candidate.is_dir() and (candidate / ".git").exists():
-                return candidate
-            return None
+            paths = self._search_paths or _default_search_paths()
+            return _find_local_clone(repo_name, paths)
 
         path = Path(repo)
-        if path.is_dir() and (path / ".git").exists():
+        if _is_git_repo(path):
             return path
         return None
 
