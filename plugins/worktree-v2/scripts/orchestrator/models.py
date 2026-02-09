@@ -1,7 +1,5 @@
 """WorkflowStep and WorkflowPlan models for the orchestrator."""
 
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,7 +23,7 @@ class WorkflowStep:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> WorkflowStep:
+    def from_dict(cls, data: dict[str, Any]) -> "WorkflowStep":
         return cls(
             id=data["id"],
             action=data["action"],
@@ -161,12 +159,12 @@ class WorkflowPlan:
         }
 
     @classmethod
-    def from_json(cls, json_str: str) -> WorkflowPlan:
+    def from_json(cls, json_str: str) -> "WorkflowPlan":
         data = json.loads(json_str)
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> WorkflowPlan:
+    def from_dict(cls, data: dict[str, Any]) -> "WorkflowPlan":
         steps = [WorkflowStep.from_dict(s) for s in data.get("steps", [])]
         metadata = data.get("metadata", {})
         return cls(steps=steps, metadata=metadata)
