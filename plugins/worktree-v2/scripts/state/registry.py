@@ -1,6 +1,5 @@
 """Global worktree registry for tracking active worktrees."""
 
-import builtins
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -51,18 +50,18 @@ class WorktreeRegistry:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    def _load(self) -> builtins.list["WorktreeEntry"]:
+    def _load(self) -> list["WorktreeEntry"]:
         if not self._path.exists():
             return []
         data = json.loads(self._path.read_text())
         return [WorktreeEntry.from_dict(w) for w in data.get("worktrees", [])]
 
-    def _save(self, entries: builtins.list["WorktreeEntry"]) -> None:
+    def _save(self, entries: list["WorktreeEntry"]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         data = {"worktrees": [e.to_dict() for e in entries]}
         self._path.write_text(json.dumps(data, indent=2))
 
-    def list(self) -> builtins.list["WorktreeEntry"]:
+    def list_all(self) -> list["WorktreeEntry"]:
         """Return all registered worktrees."""
         return self._load()
 
@@ -88,11 +87,11 @@ class WorktreeRegistry:
         self._save(filtered)
         return True
 
-    def cleanup(self) -> builtins.list[str]:
+    def cleanup(self) -> list[str]:
         """Remove entries whose worktree_path no longer exists. Returns removed names."""
         entries = self._load()
-        keep: builtins.list[WorktreeEntry] = []
-        removed: builtins.list[str] = []
+        keep: list[WorktreeEntry] = []
+        removed: list[str] = []
         for entry in entries:
             if Path(entry.worktree_path).exists():
                 keep.append(entry)

@@ -95,7 +95,7 @@ class TestWorktreeRegistry:
     def test_list_empty(self, tmp_path: Path):
         registry_path = tmp_path / "worktree-registry.json"
         reg = WorktreeRegistry(registry_path)
-        assert reg.list() == []
+        assert reg.list_all() == []
 
     def test_add_entry(self, tmp_path: Path):
         registry_path = tmp_path / "worktree-registry.json"
@@ -107,7 +107,7 @@ class TestWorktreeRegistry:
             worktree_path="/tmp/wt-1",
         )
         reg.add(entry)
-        entries = reg.list()
+        entries = reg.list_all()
         assert len(entries) == 1
         assert entries[0].name == "wt-1"
 
@@ -123,7 +123,7 @@ class TestWorktreeRegistry:
                     worktree_path=f"/tmp/wt-{i}",
                 )
             )
-        assert len(reg.list()) == 3
+        assert len(reg.list_all()) == 3
 
     def test_add_duplicate_name_replaces(self, tmp_path: Path):
         registry_path = tmp_path / "worktree-registry.json"
@@ -144,7 +144,7 @@ class TestWorktreeRegistry:
                 worktree_path="/tmp/wt-dup-new",
             )
         )
-        entries = reg.list()
+        entries = reg.list_all()
         assert len(entries) == 1
         assert entries[0].repo == "repo-v2"
 
@@ -159,10 +159,10 @@ class TestWorktreeRegistry:
                 worktree_path="/tmp/wt-rm",
             )
         )
-        assert len(reg.list()) == 1
+        assert len(reg.list_all()) == 1
         removed = reg.remove("wt-rm")
         assert removed is True
-        assert len(reg.list()) == 0
+        assert len(reg.list_all()) == 0
 
     def test_remove_nonexistent(self, tmp_path: Path):
         registry_path = tmp_path / "worktree-registry.json"
@@ -190,7 +190,7 @@ class TestWorktreeRegistry:
             )
         )
         reg.remove("remove-me")
-        entries = reg.list()
+        entries = reg.list_all()
         assert len(entries) == 1
         assert entries[0].name == "keep"
 
@@ -218,12 +218,12 @@ class TestWorktreeRegistry:
                 worktree_path="/tmp/nonexistent-path-12345",
             )
         )
-        assert len(reg.list()) == 2
+        assert len(reg.list_all()) == 2
 
         removed = reg.cleanup()
         assert removed == ["stale"]
-        assert len(reg.list()) == 1
-        assert reg.list()[0].name == "real"
+        assert len(reg.list_all()) == 1
+        assert reg.list_all()[0].name == "real"
 
     def test_cleanup_empty_registry(self, tmp_path: Path):
         registry_path = tmp_path / "worktree-registry.json"
@@ -246,7 +246,7 @@ class TestWorktreeRegistry:
         )
         removed = reg.cleanup()
         assert removed == []
-        assert len(reg.list()) == 1
+        assert len(reg.list_all()) == 1
 
     def test_persists_to_disk(self, tmp_path: Path):
         registry_path = tmp_path / "worktree-registry.json"
@@ -262,7 +262,7 @@ class TestWorktreeRegistry:
 
         # Load from a new instance
         reg2 = WorktreeRegistry(registry_path)
-        entries = reg2.list()
+        entries = reg2.list_all()
         assert len(entries) == 1
         assert entries[0].name == "persist"
 
