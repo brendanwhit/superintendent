@@ -43,6 +43,7 @@ select = [
 ignore = [
     "E501",   # line too long (handled by formatter)
     "B008",   # do not perform function calls in argument defaults
+    "FA100",  # don't suggest adding `from __future__ import annotations` (3.11+ target)
 ]
 
 [tool.ruff.lint.isort]
