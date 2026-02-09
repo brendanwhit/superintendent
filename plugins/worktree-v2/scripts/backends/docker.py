@@ -24,9 +24,7 @@ class DockerBackend(Protocol):
 
     def exec_in_sandbox(self, name: str, cmd: str) -> tuple[int, str]: ...
 
-    def run_agent(
-        self, name: str, workspace: Path, prompt: str
-    ) -> bool: ...
+    def run_agent(self, name: str, workspace: Path, prompt: str) -> bool: ...
 
     def list_sandboxes(self) -> list[str]: ...
 
@@ -47,7 +45,15 @@ class RealDockerBackend:
     def create_sandbox(
         self, name: str, workspace: Path, template: str | None = None
     ) -> bool:
-        cmd = ["docker", "sandbox", "create", "--name", name, "-v", f"{workspace}:/workspace"]
+        cmd = [
+            "docker",
+            "sandbox",
+            "create",
+            "--name",
+            name,
+            "-v",
+            f"{workspace}:/workspace",
+        ]
         if template:
             cmd.extend(["--template", template])
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -80,9 +86,7 @@ class RealDockerBackend:
             output += result.stderr
         return (result.returncode, output)
 
-    def run_agent(
-        self, name: str, workspace: Path, prompt: str
-    ) -> bool:
+    def run_agent(self, name: str, workspace: Path, prompt: str) -> bool:
         result = subprocess.run(
             [
                 "docker",
@@ -158,9 +162,7 @@ class MockDockerBackend:
             return (1, "mock failure")
         return self.exec_results.get(cmd, (0, ""))
 
-    def run_agent(
-        self, name: str, workspace: Path, prompt: str
-    ) -> bool:
+    def run_agent(self, name: str, workspace: Path, prompt: str) -> bool:
         if self.fail_on == "run_agent":
             return False
         self.agents_run.append((name, workspace, prompt))
@@ -177,7 +179,9 @@ class DryRunDockerBackend:
         self.commands: list[str] = []
 
     def sandbox_exists(self, name: str) -> bool:
-        self.commands.append(f"docker sandbox ls --format '{{{{.Name}}}}' | grep -q {name}")
+        self.commands.append(
+            f"docker sandbox ls --format '{{{{.Name}}}}' | grep -q {name}"
+        )
         return False
 
     def create_sandbox(
@@ -201,9 +205,7 @@ class DryRunDockerBackend:
         self.commands.append(f"docker sandbox exec {name} sh -c '{cmd}'")
         return (0, "")
 
-    def run_agent(
-        self, name: str, workspace: Path, prompt: str
-    ) -> bool:
+    def run_agent(self, name: str, workspace: Path, prompt: str) -> bool:
         self.commands.append(
             f"docker sandbox run --name {name} -v {workspace}:/workspace "
             f"-- claude --prompt '{prompt}'"

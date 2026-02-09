@@ -14,9 +14,7 @@ class GitBackend(Protocol):
 
     def clone(self, url: str, path: Path) -> bool: ...
 
-    def create_worktree(
-        self, repo: Path, branch: str, target: Path
-    ) -> bool: ...
+    def create_worktree(self, repo: Path, branch: str, target: Path) -> bool: ...
 
     def fetch(self, repo: Path) -> bool: ...
 
@@ -36,9 +34,7 @@ class RealGitBackend:
         )
         return result.returncode == 0
 
-    def create_worktree(
-        self, repo: Path, branch: str, target: Path
-    ) -> bool:
+    def create_worktree(self, repo: Path, branch: str, target: Path) -> bool:
         result = subprocess.run(
             ["git", "-C", str(repo), "worktree", "add", str(target), "-b", branch],
             capture_output=True,
@@ -95,9 +91,7 @@ class MockGitBackend:
         self.cloned.append((url, path))
         return True
 
-    def create_worktree(
-        self, repo: Path, branch: str, target: Path
-    ) -> bool:
+    def create_worktree(self, repo: Path, branch: str, target: Path) -> bool:
         if self.fail_on == "create_worktree":
             return False
         self.worktrees.append((repo, branch, target))
@@ -133,12 +127,8 @@ class DryRunGitBackend:
         self.commands.append(f"git clone {url} {path}")
         return True
 
-    def create_worktree(
-        self, repo: Path, branch: str, target: Path
-    ) -> bool:
-        self.commands.append(
-            f"git -C {repo} worktree add {target} -b {branch}"
-        )
+    def create_worktree(self, repo: Path, branch: str, target: Path) -> bool:
+        self.commands.append(f"git -C {repo} worktree add {target} -b {branch}")
         return True
 
     def fetch(self, repo: Path) -> bool:

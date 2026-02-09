@@ -222,6 +222,16 @@ class TestRealGitBackend:
 
         subprocess.run(["git", "init", str(repo_path)], check=True, capture_output=True)
         subprocess.run(
+            ["git", "-C", str(repo_path), "config", "user.email", "test@test.com"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_path), "config", "user.name", "Test"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
             ["git", "-C", str(repo_path), "commit", "--allow-empty", "-m", "init"],
             check=True,
             capture_output=True,
