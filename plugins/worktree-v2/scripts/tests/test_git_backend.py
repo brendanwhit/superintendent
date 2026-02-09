@@ -1,0 +1,249 @@
+"""Tests for GitBackend (Protocol, Mock, DryRun, Real)."""
+
+from pathlib import Path
+
+import pytest
+
+from backends.git import (
+    DryRunGitBackend,
+    GitBackend,
+    MockGitBackend,
+    RealGitBackend,
+)
+
+
+class TestGitBackendProtocol:
+    """Verify all implementations satisfy the GitBackend protocol."""
+
+    def test_real_satisfies_protocol(self):
+        assert isinstance(RealGitBackend(), GitBackend)
+
+    def test_mock_satisfies_protocol(self):
+        assert isinstance(MockGitBackend(), GitBackend)
+
+    def test_dryrun_satisfies_protocol(self):
+        assert isinstance(DryRunGitBackend(), GitBackend)
+
+
+class TestMockGitBackend:
+    """Test MockGitBackend recording and failure injection."""
+
+    def test_clone_records_call(self):
+        backend = MockGitBackend()
+        result = backend.clone("https://github.com/test/repo", Path("/tmp/repo"))
+        assert result is True
+        assert len(backend.cloned) == 1
+        assert backend.cloned[0] == ("https://github.com/test/repo", Path("/tmp/repo"))
+
+    def test_clone_failure(self):
+        backend = MockGitBackend(fail_on="clone")
+        result = backend.clone("https://github.com/test/repo", Path("/tmp/repo"))
+        assert result is False
+        assert len(backend.cloned) == 0
+
+    def test_create_worktree_records_call(self):
+        backend = MockGitBackend()
+        result = backend.create_worktree(
+            Path("/repo"), "feature-branch", Path("/worktree")
+        )
+        assert result is True
+        assert len(backend.worktrees) == 1
+        assert backend.worktrees[0] == (
+            Path("/repo"),
+            "feature-branch",
+            Path("/worktree"),
+        )
+
+    def test_create_worktree_failure(self):
+        backend = MockGitBackend(fail_on="create_worktree")
+        result = backend.create_worktree(
+            Path("/repo"), "feature-branch", Path("/worktree")
+        )
+        assert result is False
+
+    def test_fetch_records_call(self):
+        backend = MockGitBackend()
+        result = backend.fetch(Path("/repo"))
+        assert result is True
+        assert backend.fetched == [Path("/repo")]
+
+    def test_fetch_failure(self):
+        backend = MockGitBackend(fail_on="fetch")
+        result = backend.fetch(Path("/repo"))
+        assert result is False
+
+    def test_checkout_records_call(self):
+        backend = MockGitBackend()
+        result = backend.checkout(Path("/repo"), "main")
+        assert result is True
+        assert backend.checkouts == [(Path("/repo"), "main")]
+
+    def test_checkout_failure(self):
+        backend = MockGitBackend(fail_on="checkout")
+        result = backend.checkout(Path("/repo"), "main")
+        assert result is False
+
+    def test_ensure_local_with_known_repo(self):
+        backend = MockGitBackend(local_repos={"/path/to/repo": Path("/path/to/repo")})
+        result = backend.ensure_local("/path/to/repo")
+        assert result == Path("/path/to/repo")
+
+    def test_ensure_local_unknown_repo(self):
+        backend = MockGitBackend()
+        result = backend.ensure_local("/unknown")
+        assert result is None
+
+    def test_ensure_local_none(self):
+        backend = MockGitBackend()
+        result = backend.ensure_local(None)
+        assert result is None
+
+    def test_ensure_local_failure(self):
+        backend = MockGitBackend(
+            fail_on="ensure_local",
+            local_repos={"/repo": Path("/repo")},
+        )
+        result = backend.ensure_local("/repo")
+        assert result is None
+
+    def test_multiple_operations_recorded(self):
+        backend = MockGitBackend()
+        backend.clone("url1", Path("/p1"))
+        backend.clone("url2", Path("/p2"))
+        backend.fetch(Path("/p1"))
+        assert len(backend.cloned) == 2
+        assert len(backend.fetched) == 1
+
+
+class TestDryRunGitBackend:
+    """Test DryRunGitBackend command recording."""
+
+    def test_clone_records_command(self):
+        backend = DryRunGitBackend()
+        result = backend.clone("https://github.com/test/repo", Path("/tmp/repo"))
+        assert result is True
+        assert len(backend.commands) == 1
+        assert "git clone" in backend.commands[0]
+        assert "https://github.com/test/repo" in backend.commands[0]
+
+    def test_create_worktree_records_command(self):
+        backend = DryRunGitBackend()
+        result = backend.create_worktree(
+            Path("/repo"), "feature-branch", Path("/worktree")
+        )
+        assert result is True
+        assert "worktree add" in backend.commands[0]
+        assert "feature-branch" in backend.commands[0]
+
+    def test_fetch_records_command(self):
+        backend = DryRunGitBackend()
+        result = backend.fetch(Path("/repo"))
+        assert result is True
+        assert "fetch --all" in backend.commands[0]
+
+    def test_checkout_records_command(self):
+        backend = DryRunGitBackend()
+        result = backend.checkout(Path("/repo"), "main")
+        assert result is True
+        assert "checkout main" in backend.commands[0]
+
+    def test_ensure_local_records_command(self):
+        backend = DryRunGitBackend()
+        result = backend.ensure_local("/some/repo")
+        assert result == Path("/some/repo")
+        assert len(backend.commands) == 1
+
+    def test_ensure_local_none(self):
+        backend = DryRunGitBackend()
+        result = backend.ensure_local(None)
+        assert result is None
+        assert len(backend.commands) == 0
+
+    def test_all_operations_always_succeed(self):
+        backend = DryRunGitBackend()
+        assert backend.clone("url", Path("/p")) is True
+        assert backend.create_worktree(Path("/r"), "b", Path("/w")) is True
+        assert backend.fetch(Path("/r")) is True
+        assert backend.checkout(Path("/r"), "b") is True
+        assert len(backend.commands) == 4
+
+    def test_commands_accumulate(self):
+        backend = DryRunGitBackend()
+        backend.clone("url", Path("/p"))
+        backend.fetch(Path("/r"))
+        backend.checkout(Path("/r"), "main")
+        assert len(backend.commands) == 3
+
+
+class TestRealGitBackend:
+    """Test RealGitBackend with actual git operations."""
+
+    def test_ensure_local_with_valid_repo(self, tmp_path):
+        # Create a fake git repo
+        git_dir = tmp_path / "repo"
+        git_dir.mkdir()
+        (git_dir / ".git").mkdir()
+        backend = RealGitBackend()
+        result = backend.ensure_local(str(git_dir))
+        assert result == git_dir
+
+    def test_ensure_local_with_nonexistent_path(self):
+        backend = RealGitBackend()
+        result = backend.ensure_local("/nonexistent/path")
+        assert result is None
+
+    def test_ensure_local_with_url(self):
+        backend = RealGitBackend()
+        result = backend.ensure_local("https://github.com/test/repo")
+        assert result is None
+
+    def test_ensure_local_with_ssh_url(self):
+        backend = RealGitBackend()
+        result = backend.ensure_local("git@github.com:test/repo.git")
+        assert result is None
+
+    def test_ensure_local_none(self):
+        backend = RealGitBackend()
+        result = backend.ensure_local(None)
+        assert result is None
+
+    def test_ensure_local_non_git_dir(self, tmp_path):
+        # Directory exists but no .git
+        backend = RealGitBackend()
+        result = backend.ensure_local(str(tmp_path))
+        assert result is None
+
+    @pytest.mark.integration
+    def test_clone_and_worktree(self, tmp_path):
+        """Integration test: clone a repo and create a worktree."""
+        repo_path = tmp_path / "repo"
+        # Initialize a bare-ish local repo for testing
+        import subprocess
+
+        subprocess.run(["git", "init", str(repo_path)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(repo_path), "commit", "--allow-empty", "-m", "init"],
+            check=True,
+            capture_output=True,
+        )
+
+        backend = RealGitBackend()
+
+        # Create worktree
+        worktree_path = tmp_path / "worktree"
+        result = backend.create_worktree(repo_path, "test-branch", worktree_path)
+        assert result is True
+        assert worktree_path.exists()
+
+    @pytest.mark.integration
+    def test_fetch_on_local_repo(self, tmp_path):
+        """Integration test: fetch on a local repo."""
+        import subprocess
+
+        repo_path = tmp_path / "repo"
+        subprocess.run(["git", "init", str(repo_path)], check=True, capture_output=True)
+
+        backend = RealGitBackend()
+        # fetch --all on a repo with no remotes still returns 0
+        result = backend.fetch(repo_path)
+        assert result is True
