@@ -138,6 +138,43 @@ bd init --branch beads-sync
 # - No per-worktree database copies
 ```
 
+## Docker Sandbox Configuration
+
+SQLite doesn't work reliably in Docker sandbox filesystems (corrupts immediately
+or shortly after creation). For agents running in Docker sandboxes, configure
+beads to use JSONL-only mode:
+
+```yaml
+# .beads/config.yaml
+no-db: true           # Use JSONL backend instead of SQLite
+no-daemon: true       # Avoid 5-second daemon startup timeout
+issue-prefix: <repo>  # Required for no-db mode
+```
+
+### Additional Setup for Sandbox Agents
+
+1. **Clear assume-unchanged flag** so JSONL changes can be committed:
+   ```bash
+   git update-index --no-assume-unchanged .beads/issues.jsonl
+   ```
+
+2. **Install beads in the sandbox template** (not at runtime):
+   ```dockerfile
+   RUN npm install -g @beads/bd
+   ```
+
+3. **Pre-commit hooks still work** - they use `bd sync --flush-only` which
+   succeeds in no-db mode since there's nothing to flush.
+
+### Why These Settings?
+
+| Issue | Symptom | Fix |
+|-------|---------|-----|
+| SQLite corruption | `database disk image is malformed` | `no-db: true` |
+| Daemon timeout | 5-second delay on every command | `no-daemon: true` |
+| JSONL not committed | `git add` silently ignores file | Clear assume-unchanged |
+| no-db mode fails | "mixed prefixes" error | Set `issue-prefix` |
+
 ## Claude Code Integration
 
 Prefer CLI + hooks over MCP (10-50x more context efficient):
