@@ -4,6 +4,7 @@ from pathlib import Path
 
 from superintendent.orchestrator.sources.beads import BeadsSource
 from superintendent.orchestrator.sources.markdown import MarkdownSource
+from superintendent.orchestrator.sources.protocol import TaskSource
 from superintendent.orchestrator.sources.single import SingleTaskSource
 
 # Markdown filenames to check during auto-detection, in priority order
@@ -15,7 +16,7 @@ def detect_source(
     source_type: str = "auto",
     task_description: str | None = None,
     markdown_path: Path | None = None,
-) -> BeadsSource | MarkdownSource | SingleTaskSource | None:
+) -> TaskSource | None:
     """Detect and return the appropriate TaskSource.
 
     Args:

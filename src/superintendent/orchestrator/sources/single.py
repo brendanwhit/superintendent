@@ -1,11 +1,12 @@
-"""SingleTaskSource — wraps a single task string into the TaskSource protocol."""
+"""SingleTaskSource — wraps a single task string into a TaskSource."""
 
 import hashlib
 
 from superintendent.orchestrator.sources.models import Task, TaskStatus
+from superintendent.orchestrator.sources.protocol import TaskSource
 
 
-class SingleTaskSource:
+class SingleTaskSource(TaskSource):
     """The simplest task source: a single ad-hoc task string.
 
     Used for: `superintendent run --task 'fix the login bug'`
@@ -38,5 +39,5 @@ class SingleTaskSource:
     def update_status(self, task_id: str, status: TaskStatus) -> None:
         pass
 
-    def claim_task(self, _task_id: str, _agent_id: str) -> bool:
+    def claim_task(self, task_id: str, agent_id: str) -> bool:
         return True

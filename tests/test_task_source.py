@@ -114,14 +114,13 @@ class TestTask:
         assert task.is_blocked(completed)
 
 
-class TestTaskSourceProtocol:
-    """Test that the TaskSource protocol can be implemented correctly."""
+class TestTaskSourceABC:
+    """Test that TaskSource enforces the interface via ABC."""
 
-    def test_protocol_is_runtime_checkable(self):
+    def test_subclass_is_instance(self):
         from superintendent.orchestrator.sources.protocol import TaskSource
 
-        # A class implementing the protocol should pass isinstance check
-        class ValidSource:
+        class ValidSource(TaskSource):
             def get_tasks(self) -> list[Task]:
                 return []
 
@@ -137,12 +136,24 @@ class TestTaskSourceProtocol:
         source = ValidSource()
         assert isinstance(source, TaskSource)
 
-    def test_incomplete_implementation_not_instance(self):
+    def test_incomplete_subclass_cannot_instantiate(self):
+        import pytest
+
         from superintendent.orchestrator.sources.protocol import TaskSource
 
-        class IncompleteSource:
+        class IncompleteSource(TaskSource):
             def get_tasks(self) -> list[Task]:
                 return []
 
-        source = IncompleteSource()
-        assert not isinstance(source, TaskSource)
+        with pytest.raises(TypeError):
+            IncompleteSource()  # type: ignore[abstract]
+
+    def test_concrete_sources_are_subclasses(self):
+        from superintendent.orchestrator.sources.beads import BeadsSource
+        from superintendent.orchestrator.sources.markdown import MarkdownSource
+        from superintendent.orchestrator.sources.protocol import TaskSource
+        from superintendent.orchestrator.sources.single import SingleTaskSource
+
+        assert issubclass(BeadsSource, TaskSource)
+        assert issubclass(MarkdownSource, TaskSource)
+        assert issubclass(SingleTaskSource, TaskSource)

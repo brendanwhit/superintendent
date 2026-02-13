@@ -52,6 +52,13 @@ ignore = [
     "FA100",  # don't suggest adding `from __future__ import annotations` (3.11+ target)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# ABC overrides must keep parameter names matching the base class,
+# even when unused. ty enforces this (invalid-method-override / LSP).
+"src/superintendent/orchestrator/sources/beads.py" = ["ARG002"]
+"src/superintendent/orchestrator/sources/markdown.py" = ["ARG002"]
+"src/superintendent/orchestrator/sources/single.py" = ["ARG002"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["superintendent"]
 

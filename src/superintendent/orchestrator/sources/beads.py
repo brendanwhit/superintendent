@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from superintendent.orchestrator.sources.models import Task, TaskStatus
+from superintendent.orchestrator.sources.protocol import TaskSource
 
 # Map beads status strings to TaskStatus
 _STATUS_MAP: dict[str, TaskStatus] = {
@@ -15,7 +16,7 @@ _STATUS_MAP: dict[str, TaskStatus] = {
 }
 
 
-class BeadsSource:
+class BeadsSource(TaskSource):
     """Task source backed by the beads (bd) CLI.
 
     This is the native, first-class task source with full status sync.
@@ -48,7 +49,7 @@ class BeadsSource:
         elif status == TaskStatus.failed:
             self._run_bd_raw(["update", task_id, "--set", "status=failed"])
 
-    def claim_task(self, task_id: str, _agent_id: str) -> bool:
+    def claim_task(self, task_id: str, agent_id: str) -> bool:
         """Claim a task via ``bd update --claim``."""
         result = subprocess.run(
             ["bd", "update", task_id, "--claim"],

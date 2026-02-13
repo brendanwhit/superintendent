@@ -4,12 +4,13 @@ import re
 from pathlib import Path
 
 from superintendent.orchestrator.sources.models import Task, TaskStatus
+from superintendent.orchestrator.sources.protocol import TaskSource
 
 # Matches lines like: "- [ ] Task" or "- [x] Task" or "- [ ] [T001] Task"
 _TASK_PATTERN = re.compile(r"^(\s*)-\s+\[([ xX])\]\s+(?:\[([^\]]+)\]\s+)?(.+)$")
 
 
-class MarkdownSource:
+class MarkdownSource(TaskSource):
     """Parse tasks from a markdown checklist file.
 
     Supports:
@@ -56,7 +57,7 @@ class MarkdownSource:
         if changed:
             self._path.write_text("\n".join(new_lines) + "\n")
 
-    def claim_task(self, _task_id: str, _agent_id: str) -> bool:
+    def claim_task(self, task_id: str, agent_id: str) -> bool:
         return True
 
     def _parse_tasks(self, content: str) -> list[Task]:
