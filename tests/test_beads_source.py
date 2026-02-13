@@ -244,7 +244,7 @@ class TestBeadsSourceClaim:
             "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
         )()
         source = BeadsSource(repo_root=Path("/fake/repo"))
-        result = source.claim_task("sup-1", "agent-1")
+        result = source.claim_task("sup-1")
         assert result is True
         cmd = mock_run.call_args[0][0]
         assert "update" in cmd
@@ -259,5 +259,5 @@ class TestBeadsSourceClaim:
             {"returncode": 1, "stdout": "", "stderr": "already claimed"},
         )()
         source = BeadsSource(repo_root=Path("/fake/repo"))
-        result = source.claim_task("sup-1", "agent-1")
+        result = source.claim_task("sup-1")
         assert result is False

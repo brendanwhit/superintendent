@@ -39,5 +39,5 @@ class SingleTaskSource(TaskSource):
     def update_status(self, task_id: str, status: TaskStatus) -> None:
         pass
 
-    def claim_task(self, task_id: str, agent_id: str) -> bool:
+    def claim_task(self, task_id: str) -> bool:  # noqa: ARG002
         return True

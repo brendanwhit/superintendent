@@ -178,4 +178,4 @@ class TestMarkdownSourceClaim:
         md_file = tmp_path / "tasks.md"
         md_file.write_text(TASKS_WITH_IDS)
         source = MarkdownSource(md_file)
-        assert source.claim_task("T001", "agent-1") is True
+        assert source.claim_task("T001") is True

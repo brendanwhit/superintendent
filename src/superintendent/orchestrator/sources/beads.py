@@ -49,7 +49,7 @@ class BeadsSource(TaskSource):
         elif status == TaskStatus.failed:
             self._run_bd_raw(["update", task_id, "--set", "status=failed"])
 
-    def claim_task(self, task_id: str, agent_id: str) -> bool:
+    def claim_task(self, task_id: str) -> bool:
         """Claim a task via ``bd update --claim``."""
         result = subprocess.run(
             ["bd", "update", task_id, "--claim"],

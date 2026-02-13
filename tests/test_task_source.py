@@ -130,7 +130,7 @@ class TestTaskSourceABC:
             def update_status(self, _task_id: str, _status: TaskStatus) -> None:
                 pass
 
-            def claim_task(self, _task_id: str, _agent_id: str) -> bool:
+            def claim_task(self, _task_id: str) -> bool:
                 return True
 
         source = ValidSource()

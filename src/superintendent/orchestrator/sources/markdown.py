@@ -57,7 +57,7 @@ class MarkdownSource(TaskSource):
         if changed:
             self._path.write_text("\n".join(new_lines) + "\n")
 
-    def claim_task(self, task_id: str, agent_id: str) -> bool:
+    def claim_task(self, task_id: str) -> bool:  # noqa: ARG002
         return True
 
     def _parse_tasks(self, content: str) -> list[Task]:

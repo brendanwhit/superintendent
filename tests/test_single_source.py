@@ -58,7 +58,7 @@ class TestSingleTaskSource:
     def test_claim_task_returns_true(self):
         source = SingleTaskSource("do something")
         task = source.get_tasks()[0]
-        assert source.claim_task(task.task_id, "agent-1") is True
+        assert source.claim_task(task.task_id) is True
 
     def test_custom_task_id(self):
         source = SingleTaskSource("do something", task_id="custom-1")
