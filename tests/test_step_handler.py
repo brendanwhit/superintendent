@@ -1,7 +1,5 @@
 """Tests for step handler: dispatch, git, docker, auth, terminal handlers."""
 
-import subprocess
-
 from superintendent.backends.auth import MockAuthBackend
 from superintendent.backends.docker import MockDockerBackend
 from superintendent.backends.factory import Backends
@@ -761,25 +759,10 @@ class TestInitializeStateHandler:
 
         assert result.success is False
 
-    def test_runs_bd_init_no_db_for_sandbox(self, tmp_path, monkeypatch):
-        """When bd is available, runs bd init --no-db for sandbox targets."""
-        bd_calls = []
-
-        def mock_which(cmd):
-            if cmd == "bd":
-                return "/usr/local/bin/bd"
-            return None
-
-        def mock_run(cmd, **kwargs):
-            bd_calls.append((cmd, kwargs.get("cwd")))
-            return subprocess.CompletedProcess(cmd, 0)
-
-        monkeypatch.setattr("shutil.which", mock_which)
-        monkeypatch.setattr(
-            "superintendent.orchestrator.step_handler.subprocess.run", mock_run
-        )
-
-        ctx = ExecutionContext(backends=_mock_backends())
+    def test_starts_dolt_and_inits_beads_for_sandbox(self, tmp_path):
+        """For sandbox targets, starts Dolt server and runs bd init --sandbox."""
+        docker = MockDockerBackend()
+        ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
         ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
         ctx.step_outputs["prepare_sandbox"] = {"sandbox_name": "claude-my-repo"}
@@ -794,20 +777,56 @@ class TestInitializeStateHandler:
         result = handler.execute(step)
 
         assert result.success is True
-        # bd init --no-db should have been called
-        assert len(bd_calls) == 1
-        cmd, cwd = bd_calls[0]
-        assert cmd[0] == "/usr/local/bin/bd"
-        assert "--no-db" in cmd
-        assert "-p" in cmd
-        assert "my-repo" in cmd
-        assert cwd == tmp_path
+        # Should have exec'd: bd dolt start, health check, bd init
+        assert len(docker.executed) >= 2
+        exec_cmds = [cmd for _, cmd in docker.executed]
+        assert any("bd dolt start" in cmd for cmd in exec_cmds)
+        assert any("bd init" in cmd and "--sandbox" in cmd for cmd in exec_cmds)
 
-    def test_fallback_writes_config_when_bd_missing(self, tmp_path, monkeypatch):
-        """When bd is not installed, falls back to writing config.yaml."""
-        monkeypatch.setattr("shutil.which", lambda _cmd: None)
+    def test_beads_init_includes_skip_hooks_and_prefix(self, tmp_path):
+        """bd init command includes --skip-hooks and -p flags."""
+        docker = MockDockerBackend()
+        ctx = ExecutionContext(backends=_mock_backends(docker=docker))
+        ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
+        ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
+        ctx.step_outputs["prepare_sandbox"] = {"sandbox_name": "claude-my-repo"}
+        handler = RealStepHandler(ctx)
 
-        ctx = ExecutionContext(backends=_mock_backends())
+        step = WorkflowStep(
+            id="initialize_state",
+            action="initialize_state",
+            params={"task": "test task", "context_file": None},
+            depends_on=["authenticate"],
+        )
+        handler.execute(step)
+
+        exec_cmds = [cmd for _, cmd in docker.executed]
+        init_cmd = next(c for c in exec_cmds if "bd init" in c)
+        assert "--skip-hooks" in init_cmd
+        assert "-p" in init_cmd
+        assert "my-repo" in init_cmd
+        assert "-q" in init_cmd
+
+    def test_dolt_health_check_retries_then_succeeds(self, tmp_path, monkeypatch):
+        """Health check retries on failure, then succeeds."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        call_count = 0
+
+        class HealthCheckDockerBackend(MockDockerBackend):
+            """Mock that fails health check twice then succeeds."""
+
+            def exec_in_sandbox(self, name: str, cmd: str) -> tuple[int, str]:
+                nonlocal call_count
+                self.executed.append((name, cmd))
+                if "select 1" in cmd:
+                    call_count += 1
+                    if call_count < 3:
+                        return (1, "connection refused")
+                    return (0, "1")
+                return (0, "")
+
+        docker = HealthCheckDockerBackend()
+        ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
         ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
         ctx.step_outputs["prepare_sandbox"] = {"sandbox_name": "claude-my-repo"}
@@ -822,18 +841,41 @@ class TestInitializeStateHandler:
         result = handler.execute(step)
 
         assert result.success is True
-        beads_config = tmp_path / ".beads" / "config.yaml"
-        assert beads_config.exists()
-        content = beads_config.read_text()
-        assert "no-db: true" in content
-        assert "no-daemon: true" in content
-        assert "issue-prefix: my-repo" in content
+        assert call_count == 3  # failed twice, succeeded on third
 
-    def test_beads_init_for_container(self, tmp_path, monkeypatch):
-        """Container targets also get beads initialization."""
-        monkeypatch.setattr("shutil.which", lambda _cmd: None)
+    def test_dolt_health_check_timeout_fails(self, tmp_path, monkeypatch):
+        """If health check never succeeds, the step fails."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
 
-        ctx = ExecutionContext(backends=_mock_backends())
+        class AlwaysFailHealthCheck(MockDockerBackend):
+            def exec_in_sandbox(self, name: str, cmd: str) -> tuple[int, str]:
+                self.executed.append((name, cmd))
+                if "select 1" in cmd:
+                    return (1, "connection refused")
+                return (0, "")
+
+        docker = AlwaysFailHealthCheck()
+        ctx = ExecutionContext(backends=_mock_backends(docker=docker))
+        ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
+        ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
+        ctx.step_outputs["prepare_sandbox"] = {"sandbox_name": "claude-my-repo"}
+        handler = RealStepHandler(ctx)
+
+        step = WorkflowStep(
+            id="initialize_state",
+            action="initialize_state",
+            params={"task": "test task", "context_file": None},
+            depends_on=["authenticate"],
+        )
+        result = handler.execute(step)
+
+        assert result.success is False
+        assert "dolt" in result.message.lower() or "beads" in result.message.lower()
+
+    def test_beads_init_for_container(self, tmp_path):
+        """Container targets also get Dolt startup and beads initialization."""
+        docker = MockDockerBackend()
+        ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
         ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
         ctx.step_outputs["prepare_container"] = {"container_name": "claude-my-repo"}
@@ -848,8 +890,9 @@ class TestInitializeStateHandler:
         result = handler.execute(step)
 
         assert result.success is True
-        beads_config = tmp_path / ".beads" / "config.yaml"
-        assert beads_config.exists()
+        exec_cmds = [cmd for _, cmd in docker.executed]
+        assert any("bd dolt start" in cmd for cmd in exec_cmds)
+        assert any("bd init" in cmd for cmd in exec_cmds)
 
     def test_no_beads_init_for_local(self, tmp_path):
         """Local target (no sandbox/container output) does not init beads."""

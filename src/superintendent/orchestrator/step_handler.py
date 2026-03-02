@@ -351,14 +351,28 @@ class RealStepHandler:
         ralph_state = RalphState(ralph_dir)
         ralph_state.init(task=task)
 
-        # Initialize beads in no-db mode for sandbox/container targets
+        # Initialize beads with Dolt for sandbox/container targets
         is_sandbox = "prepare_sandbox" in self._context.step_outputs
         is_container = "prepare_container" in self._context.step_outputs
         if is_sandbox or is_container:
+            env_name = ""
+            if is_sandbox:
+                env_name = self._context.step_outputs["prepare_sandbox"]["sandbox_name"]
+            else:
+                env_name = self._context.step_outputs["prepare_container"][
+                    "container_name"
+                ]
             repo_name = Path(
                 self._context.step_outputs.get("validate_repo", {}).get("repo_path", "")
             ).name
-            self._init_beads_no_db(worktree_path, repo_name)
+
+            init_result = self._init_beads(env_name, repo_name)
+            if not init_result:
+                return StepResult(
+                    success=False,
+                    step_id=step.id,
+                    message=f"Failed to initialize beads/Dolt in {env_name}",
+                )
 
         return StepResult(
             success=True,
@@ -366,38 +380,39 @@ class RealStepHandler:
             data={"ralph_dir": str(ralph_dir)},
         )
 
-    def _init_beads_no_db(self, worktree_path: Path, repo_name: str) -> None:
-        """Initialize beads in no-db (JSONL) mode in the worktree.
+    def _init_beads(self, env_name: str, repo_name: str) -> bool:
+        """Initialize beads with Dolt SQL server inside a sandbox/container.
 
-        Runs `bd init --no-db` if bd is available on the host. Falls back
-        to writing a minimal config.yaml if bd is not installed.
+        Starts the Dolt server, waits for it to be healthy, then runs bd init.
+        Returns True on success, False on failure.
         """
-        bd_path = shutil.which("bd")
-        if bd_path:
-            subprocess.run(
-                [
-                    bd_path,
-                    "init",
-                    "--no-db",
-                    "-p",
-                    repo_name,
-                    "--skip-hooks",
-                    "--skip-merge-driver",
-                    "-q",
-                ],
-                cwd=worktree_path,
-                capture_output=True,
-                text=True,
-                timeout=30,
+        import time
+
+        docker = self._context.backends.docker
+
+        # 1. Start Dolt server
+        docker.exec_in_sandbox(env_name, "bd dolt start")
+
+        # 2. Health-check with retry
+        max_retries = 10
+        for attempt in range(max_retries):
+            exit_code, _ = docker.exec_in_sandbox(
+                env_name,
+                "dolt --host 127.0.0.1 --port 3307 --no-tls sql -q 'select 1;'",
             )
+            if exit_code == 0:
+                break
+            if attempt < max_retries - 1:
+                time.sleep(1)
         else:
-            # Fallback: write minimal config so agent knows it's no-db mode
-            beads_dir = worktree_path / ".beads"
-            beads_dir.mkdir(parents=True, exist_ok=True)
-            config_content = (
-                f"no-db: true\nno-daemon: true\nissue-prefix: {repo_name}\n"
-            )
-            (beads_dir / "config.yaml").write_text(config_content)
+            return False
+
+        # 3. Initialize beads
+        exit_code, _ = docker.exec_in_sandbox(
+            env_name,
+            f"bd init --sandbox --skip-hooks -p {repo_name} -q",
+        )
+        return exit_code == 0
 
     # -- Terminal handler (start_agent) ---------------------------------------
 
