@@ -114,8 +114,8 @@ class TestDryRunSandboxCommands:
         assert "gh auth setup-git" in auth.commands[0]
         assert "claude-my-repo" in auth.commands[0]
 
-    def test_sandbox_flow_records_beads_init_commands(self) -> None:
-        """Dry-run records Dolt startup and beads init exec commands."""
+    def test_sandbox_flow_records_beads_init_command(self) -> None:
+        """Dry-run records beads init exec command (auto-starts Dolt)."""
         backends = _dryrun_backends()
         ctx = ExecutionContext(backends=backends)
         handler = RealStepHandler(ctx)
@@ -127,7 +127,6 @@ class TestDryRunSandboxCommands:
         docker = backends.docker
         assert isinstance(docker, DryRunDockerBackend)
         exec_cmds = [c for c in docker.commands if "exec" in c]
-        assert any("bd dolt start" in c for c in exec_cmds)
         assert any("bd init" in c and "--sandbox" in c for c in exec_cmds)
 
     def test_sandbox_flow_records_agent_run(self) -> None:

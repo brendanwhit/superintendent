@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -383,34 +384,19 @@ class RealStepHandler:
     def _init_beads(self, env_name: str, repo_name: str) -> bool:
         """Initialize beads with Dolt SQL server inside a sandbox/container.
 
-        Starts the Dolt server, waits for it to be healthy, then runs bd init.
+        bd init auto-starts the Dolt server internally (AutoStart flag),
+        so a single command handles everything: creates .beads/, runs
+        dolt init, starts dolt sql-server, and creates the schema.
         Returns True on success, False on failure.
         """
-        import time
-
         docker = self._context.backends.docker
 
-        # 1. Start Dolt server
-        docker.exec_in_sandbox(env_name, "bd dolt start")
+        # Sanitize repo name for use as Dolt database name (no dots allowed)
+        prefix = re.sub(r"[^a-zA-Z0-9_-]", "-", repo_name)
 
-        # 2. Health-check with retry
-        max_retries = 10
-        for attempt in range(max_retries):
-            exit_code, _ = docker.exec_in_sandbox(
-                env_name,
-                "dolt --host 127.0.0.1 --port 3307 --no-tls sql -q 'select 1;'",
-            )
-            if exit_code == 0:
-                break
-            if attempt < max_retries - 1:
-                time.sleep(1)
-        else:
-            return False
-
-        # 3. Initialize beads
         exit_code, _ = docker.exec_in_sandbox(
             env_name,
-            f"bd init --sandbox --skip-hooks -p {repo_name} -q",
+            f"bd init --sandbox --skip-hooks -p {prefix} -q",
         )
         return exit_code == 0
 

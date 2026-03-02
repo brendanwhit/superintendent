@@ -759,8 +759,8 @@ class TestInitializeStateHandler:
 
         assert result.success is False
 
-    def test_starts_dolt_and_inits_beads_for_sandbox(self, tmp_path):
-        """For sandbox targets, starts Dolt server and runs bd init --sandbox."""
+    def test_inits_beads_for_sandbox(self, tmp_path):
+        """For sandbox targets, runs bd init --sandbox (auto-starts Dolt)."""
         docker = MockDockerBackend()
         ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
@@ -777,10 +777,8 @@ class TestInitializeStateHandler:
         result = handler.execute(step)
 
         assert result.success is True
-        # Should have exec'd: bd dolt start, health check, bd init
-        assert len(docker.executed) >= 2
+        assert len(docker.executed) == 1
         exec_cmds = [cmd for _, cmd in docker.executed]
-        assert any("bd dolt start" in cmd for cmd in exec_cmds)
         assert any("bd init" in cmd and "--sandbox" in cmd for cmd in exec_cmds)
 
     def test_beads_init_includes_skip_hooks_and_prefix(self, tmp_path):
@@ -807,29 +805,13 @@ class TestInitializeStateHandler:
         assert "my-repo" in init_cmd
         assert "-q" in init_cmd
 
-    def test_dolt_health_check_retries_then_succeeds(self, tmp_path, monkeypatch):
-        """Health check retries on failure, then succeeds."""
-        monkeypatch.setattr("time.sleep", lambda _: None)
-        call_count = 0
-
-        class HealthCheckDockerBackend(MockDockerBackend):
-            """Mock that fails health check twice then succeeds."""
-
-            def exec_in_sandbox(self, name: str, cmd: str) -> tuple[int, str]:
-                nonlocal call_count
-                self.executed.append((name, cmd))
-                if "select 1" in cmd:
-                    call_count += 1
-                    if call_count < 3:
-                        return (1, "connection refused")
-                    return (0, "1")
-                return (0, "")
-
-        docker = HealthCheckDockerBackend()
+    def test_beads_init_sanitizes_repo_name(self, tmp_path):
+        """Dots in repo name are replaced with hyphens for Dolt database name."""
+        docker = MockDockerBackend()
         ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
-        ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
-        ctx.step_outputs["prepare_sandbox"] = {"sandbox_name": "claude-my-repo"}
+        ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/prview.nvim"}
+        ctx.step_outputs["prepare_sandbox"] = {"sandbox_name": "claude-prview"}
         handler = RealStepHandler(ctx)
 
         step = WorkflowStep(
@@ -838,23 +820,16 @@ class TestInitializeStateHandler:
             params={"task": "test task", "context_file": None},
             depends_on=["authenticate"],
         )
-        result = handler.execute(step)
+        handler.execute(step)
 
-        assert result.success is True
-        assert call_count == 3  # failed twice, succeeded on third
+        exec_cmds = [cmd for _, cmd in docker.executed]
+        init_cmd = next(c for c in exec_cmds if "bd init" in c)
+        assert "prview-nvim" in init_cmd
+        assert "prview.nvim" not in init_cmd
 
-    def test_dolt_health_check_timeout_fails(self, tmp_path, monkeypatch):
-        """If health check never succeeds, the step fails."""
-        monkeypatch.setattr("time.sleep", lambda _: None)
-
-        class AlwaysFailHealthCheck(MockDockerBackend):
-            def exec_in_sandbox(self, name: str, cmd: str) -> tuple[int, str]:
-                self.executed.append((name, cmd))
-                if "select 1" in cmd:
-                    return (1, "connection refused")
-                return (0, "")
-
-        docker = AlwaysFailHealthCheck()
+    def test_beads_init_failure_returns_error(self, tmp_path):
+        """If bd init fails, the step returns failure."""
+        docker = MockDockerBackend(fail_on="exec_in_sandbox")
         ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
         ctx.step_outputs["validate_repo"] = {"repo_path": "/home/user/my-repo"}
@@ -870,10 +845,10 @@ class TestInitializeStateHandler:
         result = handler.execute(step)
 
         assert result.success is False
-        assert "dolt" in result.message.lower() or "beads" in result.message.lower()
+        assert "beads" in result.message.lower() or "dolt" in result.message.lower()
 
     def test_beads_init_for_container(self, tmp_path):
-        """Container targets also get Dolt startup and beads initialization."""
+        """Container targets also get beads initialization."""
         docker = MockDockerBackend()
         ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
@@ -891,7 +866,6 @@ class TestInitializeStateHandler:
 
         assert result.success is True
         exec_cmds = [cmd for _, cmd in docker.executed]
-        assert any("bd dolt start" in cmd for cmd in exec_cmds)
         assert any("bd init" in cmd for cmd in exec_cmds)
 
     def test_no_beads_init_for_local(self, tmp_path):
