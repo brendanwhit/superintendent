@@ -140,30 +140,20 @@ bd init --branch beads-sync
 
 ## Docker Sandbox Configuration
 
-The beads database (Dolt) is not available inside Docker sandboxes. For agents
-running in Docker sandboxes, configure beads to use JSONL-only mode:
+Superintendent automatically sets up beads with a Dolt SQL server inside each
+sandbox during the `initialize_state` workflow step. The setup:
 
-```yaml
-# .beads/config.yaml
-no-db: true           # Use JSONL backend instead of SQLite
-no-daemon: true       # Avoid 5-second daemon startup timeout
-issue-prefix: <repo>  # Required for no-db mode
-```
+1. **Dolt binary** is baked into the sandbox template image (multi-stage build)
+2. **Dolt server** is started inside the sandbox via `bd dolt start`
+3. **Beads is initialized** with `bd init --sandbox --skip-hooks -p {repo_name} -q`
+4. Beads auto-detects the running Dolt server on port 3307
 
-### Additional Setup for Sandbox Agents
+### Agent Conventions
 
-1. **Clear assume-unchanged flag** so JSONL changes can be committed:
-   ```bash
-   git update-index --no-assume-unchanged .beads/issues.jsonl
-   ```
+Agents inside sandboxes should use these flags with all `bd` commands:
 
-2. **Install beads in the sandbox template** (not at runtime):
-   ```dockerfile
-   RUN npm install -g @beads/bd
-   ```
-
-3. **Pre-commit hooks still work** - they use `bd sync --flush-only` which
-   succeeds in no-db mode since there's nothing to flush.
+- `--sandbox` — disables auto-sync (sandbox-safe)
+- `--json` — structured JSON output for reliable parsing
 
 ### Sandbox Network Limitations
 
@@ -171,19 +161,17 @@ Docker sandboxes have restricted network access:
 
 - **No SSH**: `git@github.com:...` URLs will fail. Use HTTPS URLs or `gh` CLI
 - **HTTPS + gh CLI only**: All git operations must use HTTPS remotes
-- **No SQLite daemon**: The beads daemon cannot run; use JSONL-only mode
 - **Agents should commit and push**: Configure agents to `git push` and
   create PRs via `gh pr create` before finishing, since the sandbox is
   ephemeral
 
-### Why These Settings?
+### Troubleshooting
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| No DB in sandbox | Dolt not available in Docker sandbox | `no-db: true` |
-| Daemon timeout | 5-second delay on every command | `no-daemon: true` |
-| JSONL not committed | `git add` silently ignores file | Clear assume-unchanged |
-| no-db mode fails | "mixed prefixes" error | Set `issue-prefix` |
+| Dolt not starting | `bd` commands fail with connection error | Check `dolt` binary is in template image |
+| Health check timeout | `initialize_state` step fails | Dolt may need more startup time; check container resources |
+| Init fails | `bd init` returns non-zero | Verify `--sandbox` flag and repo name prefix |
 
 ## Claude Code Integration
 
