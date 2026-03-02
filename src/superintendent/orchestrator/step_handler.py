@@ -1,5 +1,9 @@
 """RealStepHandler: dispatches workflow steps to backend operations."""
 
+import hashlib
+import os
+import shutil
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +13,14 @@ from superintendent.backends.factory import Backends
 from superintendent.orchestrator.executor import StepResult
 from superintendent.orchestrator.models import Verbosity, WorkflowStep
 from superintendent.state.ralph import RalphState
+from superintendent.state.token_store import TokenStore
+
+SANDBOX_BASE_IMAGE = "docker/sandbox-templates:claude-code"
+
+
+def default_worktrees_dir() -> Path:
+    """Return the default base directory for agent worktrees."""
+    return Path.home() / ".claude-worktrees"
 
 
 @dataclass
@@ -18,6 +30,7 @@ class ExecutionContext:
     backends: Backends
     step_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     verbosity: Verbosity = Verbosity.normal
+    token_store: TokenStore = field(default_factory=TokenStore)
 
 
 class RealStepHandler:
@@ -28,6 +41,7 @@ class RealStepHandler:
         self._dispatch: dict[str, Callable[[WorkflowStep], StepResult]] = {
             "validate_repo": self._handle_validate_repo,
             "create_worktree": self._handle_create_worktree,
+            "prepare_template": self._handle_prepare_template,
             "prepare_sandbox": self._handle_prepare_sandbox,
             "prepare_container": self._handle_prepare_container,
             "authenticate": self._handle_authenticate,
@@ -106,19 +120,58 @@ class RealStepHandler:
         repo_path = Path(validate_output["repo_path"])
         branch = step.params["branch"]
         repo_name = step.params["repo_name"]
-        worktree_path = repo_path.parent / f"{repo_name}-{branch.replace('/', '-')}"
+        standalone = step.params.get("standalone", False)
+        slug = branch.replace("/", "-")
+        worktree_path = default_worktrees_dir() / repo_name / slug
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not git.create_worktree(repo_path, branch, worktree_path):
+        if standalone:
+            # Standalone clones are disposable — remove stale dir before re-cloning
+            if worktree_path.exists():
+                shutil.rmtree(worktree_path)
+            ok = git.clone_for_sandbox(repo_path, worktree_path, branch)
+        else:
+            ok = git.create_worktree(repo_path, branch, worktree_path)
+
+        if not ok:
+            action = "clone for sandbox" if standalone else "create worktree"
             return StepResult(
                 success=False,
                 step_id=step.id,
-                message=f"Failed to create worktree at {worktree_path}",
+                message=f"Failed to {action} at {worktree_path}",
             )
 
         return StepResult(
             success=True,
             step_id=step.id,
             data={"worktree_path": str(worktree_path)},
+        )
+
+    # -- Template handler (prepare_template) ----------------------------------
+
+    def _handle_prepare_template(self, step: WorkflowStep) -> StepResult:
+        dockerfile = (
+            "FROM dolthub/dolt:latest AS dolt-binary\n"
+            f"FROM {SANDBOX_BASE_IMAGE}\n"
+            "COPY --from=dolt-binary /usr/local/bin/dolt /usr/local/bin/dolt\n"
+            "RUN npm install -g @beads/bd\n"
+        )
+        tag = "supt-sandbox:" + hashlib.sha256(dockerfile.encode()).hexdigest()[:12]
+
+        docker = self._context.backends.docker
+        if not docker.template_exists(tag) and not docker.build_template(
+            dockerfile, tag
+        ):
+            return StepResult(
+                success=False,
+                step_id=step.id,
+                message=f"Failed to build template: {tag}",
+            )
+
+        return StepResult(
+            success=True,
+            step_id=step.id,
+            data={"template": tag},
         )
 
     # -- Docker handlers (prepare_sandbox) ------------------------------------
@@ -137,10 +190,15 @@ class RealStepHandler:
         force = step.params.get("force", False)
         workspace = Path(wt_output["worktree_path"])
 
+        # Pick up template tag from prepare_template step, if available
+        template_output = self._context.step_outputs.get("prepare_template")
+        template = template_output["template"] if template_output else None
+
         if force and docker.sandbox_exists(sandbox_name):
             docker.stop_sandbox(sandbox_name)
+            docker.remove_sandbox(sandbox_name)
 
-        if not docker.create_sandbox(sandbox_name, workspace):
+        if not docker.create_sandbox(sandbox_name, workspace, template=template):
             return StepResult(
                 success=False,
                 step_id=step.id,
@@ -193,14 +251,87 @@ class RealStepHandler:
             "container_name", ""
         )
 
-        if not auth.setup_git_auth(env_name):
-            return StepResult(
-                success=False,
-                step_id=step.id,
-                message=f"Failed to configure auth in {env_name}",
-            )
+        # Resolve token: TokenStore (per-repo or default) → host gh auth → fail
+        token = self._resolve_token()
+        if token:
+            if not auth.inject_token(env_name, token):
+                return StepResult(
+                    success=False,
+                    step_id=step.id,
+                    message=f"Failed to inject token into {env_name}",
+                )
+        else:
+            # No token available — fall back to bare setup_git_auth
+            if not auth.setup_git_auth(env_name):
+                return StepResult(
+                    success=False,
+                    step_id=step.id,
+                    message=f"Failed to configure auth in {env_name} (no token available)",
+                )
 
         return StepResult(success=True, step_id=step.id)
+
+    def _resolve_token(self) -> str | None:
+        """Resolve a GitHub token from TokenStore or host gh CLI."""
+        store = self._context.token_store
+
+        # Try repo-specific token from validate_repo output
+        validate_output = self._context.step_outputs.get("validate_repo")
+        if validate_output:
+            repo_path = Path(validate_output["repo_path"])
+            repo_id = self._get_repo_identifier(repo_path)
+            if repo_id:
+                result = store.resolve(repo_id)
+                if result.token:
+                    return result.token
+
+        # Try default token
+        default = store.get("_default")
+        if default:
+            return default.token
+
+        # Fall back to host's gh auth token
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # Check environment variables
+        return os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
+    def _get_repo_identifier(self, repo_path: Path) -> str | None:
+        """Extract owner/repo from a git repo's remote URL."""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_path), "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            url = result.stdout.strip()
+            # Parse SSH or HTTPS URL
+            if url.startswith("git@"):
+                # git@github.com:owner/repo.git
+                path = url.split(":", 1)[1]
+            elif "github.com" in url:
+                # https://github.com/owner/repo.git
+                path = url.split("github.com/", 1)[1] if "github.com/" in url else None
+                if not path:
+                    return None
+            else:
+                return None
+            return path.removesuffix(".git")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
 
     # -- State handler (initialize_state) -------------------------------------
 
@@ -220,24 +351,69 @@ class RealStepHandler:
         ralph_state = RalphState(ralph_dir)
         ralph_state.init(task=task)
 
+        # Initialize beads in no-db mode for sandbox/container targets
+        is_sandbox = "prepare_sandbox" in self._context.step_outputs
+        is_container = "prepare_container" in self._context.step_outputs
+        if is_sandbox or is_container:
+            repo_name = Path(
+                self._context.step_outputs.get("validate_repo", {}).get("repo_path", "")
+            ).name
+            self._init_beads_no_db(worktree_path, repo_name)
+
         return StepResult(
             success=True,
             step_id=step.id,
             data={"ralph_dir": str(ralph_dir)},
         )
 
+    def _init_beads_no_db(self, worktree_path: Path, repo_name: str) -> None:
+        """Initialize beads in no-db (JSONL) mode in the worktree.
+
+        Runs `bd init --no-db` if bd is available on the host. Falls back
+        to writing a minimal config.yaml if bd is not installed.
+        """
+        bd_path = shutil.which("bd")
+        if bd_path:
+            subprocess.run(
+                [
+                    bd_path,
+                    "init",
+                    "--no-db",
+                    "-p",
+                    repo_name,
+                    "--skip-hooks",
+                    "--skip-merge-driver",
+                    "-q",
+                ],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        else:
+            # Fallback: write minimal config so agent knows it's no-db mode
+            beads_dir = worktree_path / ".beads"
+            beads_dir.mkdir(parents=True, exist_ok=True)
+            config_content = (
+                f"no-db: true\nno-daemon: true\nissue-prefix: {repo_name}\n"
+            )
+            (beads_dir / "config.yaml").write_text(config_content)
+
     # -- Terminal handler (start_agent) ---------------------------------------
 
     def _handle_start_agent(self, step: WorkflowStep) -> StepResult:
         env_name = step.params.get("sandbox_name") or step.params.get("container_name")
         task = step.params.get("task", "")
+        autonomous = step.params.get("mode") == "autonomous"
 
         wt_output = self._context.step_outputs.get("create_worktree")
         worktree_path = Path(wt_output["worktree_path"]) if wt_output else Path.cwd()
 
         if env_name:
             docker = self._context.backends.docker
-            if not docker.run_agent(env_name, task):
+            if not docker.run_agent(
+                env_name, task, autonomous=autonomous, cwd=worktree_path
+            ):
                 return StepResult(
                     success=False,
                     step_id=step.id,
