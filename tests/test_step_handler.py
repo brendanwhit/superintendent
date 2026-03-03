@@ -802,11 +802,12 @@ class TestInitializeStateHandler:
         init_cmd = next(c for c in exec_cmds if "bd init" in c)
         assert "--skip-hooks" in init_cmd
         assert "-p" in init_cmd
-        assert "my-repo" in init_cmd
+        assert "my_repo" in init_cmd
+        assert "--database" in init_cmd
         assert "-q" in init_cmd
 
     def test_beads_init_sanitizes_repo_name(self, tmp_path):
-        """Dots in repo name are replaced with hyphens for Dolt database name."""
+        """Dots in repo name are replaced with underscores for Dolt database name."""
         docker = MockDockerBackend()
         ctx = ExecutionContext(backends=_mock_backends(docker=docker))
         ctx.step_outputs["create_worktree"] = {"worktree_path": str(tmp_path)}
@@ -824,7 +825,7 @@ class TestInitializeStateHandler:
 
         exec_cmds = [cmd for _, cmd in docker.executed]
         init_cmd = next(c for c in exec_cmds if "bd init" in c)
-        assert "prview-nvim" in init_cmd
+        assert "prview_nvim" in init_cmd
         assert "prview.nvim" not in init_cmd
 
     def test_beads_init_failure_returns_error(self, tmp_path):

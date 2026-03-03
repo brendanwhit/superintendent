@@ -387,17 +387,36 @@ class RealStepHandler:
         bd init auto-starts the Dolt server internally (AutoStart flag),
         so a single command handles everything: creates .beads/, runs
         dolt init, starts dolt sql-server, and creates the schema.
+
+        Sanitizes the repo name for Dolt (no dots, must be valid MySQL
+        identifier) and passes both --prefix and --database explicitly
+        to avoid bd deriving invalid names from directory names.
+
+        Retries once on failure to handle transient Dolt fsync issues
+        in container environments.
+
         Returns True on success, False on failure.
         """
         docker = self._context.backends.docker
 
-        # Sanitize repo name for use as Dolt database name (no dots allowed)
-        prefix = re.sub(r"[^a-zA-Z0-9_-]", "-", repo_name)
+        # Sanitize repo name for use as Dolt database/prefix name
+        # Dolt database names follow MySQL rules: no dots, no leading hyphens
+        sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", repo_name).strip("_")
+        if not sanitized:
+            sanitized = "beads"
 
-        exit_code, _ = docker.exec_in_sandbox(
-            env_name,
-            f"bd init --sandbox --skip-hooks -p {prefix} -q",
+        init_cmd = (
+            f"bd init --sandbox --skip-hooks -p {sanitized} --database {sanitized} -q"
         )
+
+        exit_code, _ = docker.exec_in_sandbox(env_name, init_cmd)
+        if exit_code == 0:
+            return True
+
+        # Retry once: Dolt can fail on first start in containers due to
+        # fsync issues on overlay filesystems. Clean up and try again.
+        docker.exec_in_sandbox(env_name, "rm -rf .beads && sleep 2")
+        exit_code, _ = docker.exec_in_sandbox(env_name, init_cmd)
         return exit_code == 0
 
     # -- Terminal handler (start_agent) ---------------------------------------

@@ -141,7 +141,7 @@ class TestDryRunSandboxCommands:
 
         docker = backends.docker
         assert isinstance(docker, DryRunDockerBackend)
-        run_cmds = [c for c in docker.commands if "run" in c]
+        run_cmds = [c for c in docker.commands if "sandbox run" in c]
         assert len(run_cmds) >= 1
         assert "claude-my-repo" in run_cmds[0]
         assert "fix bug" in run_cmds[0]
