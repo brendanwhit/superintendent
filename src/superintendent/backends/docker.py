@@ -78,6 +78,9 @@ class DockerBackend(Protocol):
 class RealDockerBackend:
     """Executes actual docker sandbox commands via subprocess."""
 
+    def __init__(self, stream_output: bool = False) -> None:
+        self._stream_output = stream_output
+
     def sandbox_exists(self, name: str) -> bool:
         result = subprocess.run(
             ["docker", "sandbox", "ls", "-q"],
@@ -95,7 +98,10 @@ class RealDockerBackend:
         if template:
             cmd.extend(["-t", template])
         cmd.extend(["--name", name, "claude", str(workspace)])
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        if self._stream_output:
+            result = subprocess.run(cmd, text=True)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
 
     def start_sandbox(self, name: str) -> bool:
@@ -174,12 +180,13 @@ class RealDockerBackend:
             f.write(dockerfile_content)
             dockerfile_path = f.name
         try:
-            result = subprocess.run(
-                ["docker", "build", "-t", tag, "-f", dockerfile_path, "."],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
+            build_cmd = ["docker", "build", "-t", tag, "-f", dockerfile_path, "."]
+            if self._stream_output:
+                result = subprocess.run(build_cmd, text=True, timeout=600)
+            else:
+                result = subprocess.run(
+                    build_cmd, capture_output=True, text=True, timeout=600
+                )
             return result.returncode == 0
         finally:
             Path(dockerfile_path).unlink(missing_ok=True)

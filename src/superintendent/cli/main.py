@@ -19,7 +19,7 @@ import typer
 from superintendent.backends.factory import BackendMode, create_backends
 from superintendent.backends.git import DEFAULT_STALE_DAYS, GitBackend, RealGitBackend
 from superintendent.orchestrator.executor import Executor
-from superintendent.orchestrator.models import Mode, Target, Verbosity
+from superintendent.orchestrator.models import Mode, Target, Verbosity, WorkflowStep
 from superintendent.orchestrator.planner import Planner, PlannerInput
 from superintendent.orchestrator.repo_info import RepoInfo
 from superintendent.orchestrator.step_handler import (
@@ -29,7 +29,23 @@ from superintendent.orchestrator.step_handler import (
 )
 from superintendent.orchestrator.strategy import ExecutionStrategy, TaskInfo
 from superintendent.state.registry import WorktreeEntry, WorktreeRegistry
-from superintendent.state.token_store import DEFAULT_KEY, TokenStore
+from superintendent.state.token_store import (
+    DEFAULT_KEY,
+    TokenStore,
+    introspect_token_permissions,
+)
+
+_STEP_LABELS: dict[str, str] = {
+    "validate_repo": "Validating repository...",
+    "validate_auth": "Checking authentication...",
+    "create_worktree": "Cloning repository...",
+    "prepare_template": "Building sandbox template...",
+    "prepare_sandbox": "Creating sandbox...",
+    "prepare_container": "Creating container...",
+    "authenticate": "Configuring authentication...",
+    "initialize_state": "Initializing workspace...",
+    "start_agent": "Starting agent...",
+}
 
 app = typer.Typer(name="superintendent", no_args_is_help=True)
 token_app = typer.Typer(name="token", help="Manage scoped GitHub tokens.")
@@ -415,14 +431,24 @@ def run(
 
     planner = Planner()
 
+    stream = verbosity != Verbosity.quiet
     if dry_run:
         backends = create_backends(BackendMode.DRYRUN)
     else:
-        backends = create_backends(BackendMode.REAL)
+        backends = create_backends(BackendMode.REAL, stream_output=stream)
 
-    context = ExecutionContext(backends=backends, verbosity=verbosity)
+    context = ExecutionContext(backends=backends, verbosity=verbosity, dry_run=dry_run)
     handler = RealStepHandler(context)
-    executor = Executor(handler=handler)
+
+    def _on_step_start(step: WorkflowStep) -> None:
+        if verbosity != Verbosity.quiet:
+            label = _STEP_LABELS.get(step.action, f"Running {step.action}...")
+            typer.echo(label)
+
+    executor = Executor(
+        handler=handler,
+        on_step_start=None if dry_run else _on_step_start,
+    )
 
     planner_input = PlannerInput(
         repo=repo,
@@ -612,8 +638,13 @@ def token_add(
     if existing is not None:
         typer.echo(f"Token already exists for {repo}. Use 'token update' to replace.")
         raise typer.Exit(code=1)
-    store.add(repo, token, permissions=permissions or [])
+    # Introspect actual permissions from GitHub API
+    discovered = introspect_token_permissions(token)
+    effective_perms = permissions if permissions else discovered
+    store.add(repo, token, permissions=effective_perms)
     typer.echo(f"Token added for {repo}")
+    if discovered:
+        typer.echo(f"  Discovered permissions: {', '.join(discovered)}")
 
 
 @token_app.command("update")
@@ -632,8 +663,15 @@ def token_update(
     if existing is None:
         typer.echo(f"No token found for {repo}. Use 'token add' first.")
         raise typer.Exit(code=1)
-    store.add(repo, token, permissions=permissions or existing.permissions)
+    # Introspect actual permissions from GitHub API
+    discovered = introspect_token_permissions(token)
+    effective_perms = (
+        permissions if permissions else (discovered or existing.permissions)
+    )
+    store.add(repo, token, permissions=effective_perms)
     typer.echo(f"Token updated for {repo}")
+    if discovered:
+        typer.echo(f"  Discovered permissions: {', '.join(discovered)}")
 
 
 @token_app.command("remove")

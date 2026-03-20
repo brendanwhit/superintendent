@@ -138,7 +138,17 @@ class Planner:
     ) -> None:
         sandbox_name = metadata["sandbox_name"]
 
-        # Step 2: Create worktree (standalone clone for sandbox isolation)
+        # Step 2: Validate auth before expensive operations
+        steps.append(
+            WorkflowStep(
+                id="validate_auth",
+                action="validate_auth",
+                params={},
+                depends_on=["validate_repo"],
+            )
+        )
+
+        # Step 3: Create worktree (standalone clone for sandbox isolation)
         steps.append(
             WorkflowStep(
                 id="create_worktree",
@@ -148,7 +158,7 @@ class Planner:
                     "repo_name": metadata["repo_name"],
                     "standalone": True,
                 },
-                depends_on=["validate_repo"],
+                depends_on=["validate_auth"],
             )
         )
 
@@ -213,7 +223,17 @@ class Planner:
     ) -> None:
         container_name = metadata["container_name"]
 
-        # Step 2: Create worktree (standalone clone for container isolation)
+        # Step 2: Validate auth before expensive operations
+        steps.append(
+            WorkflowStep(
+                id="validate_auth",
+                action="validate_auth",
+                params={},
+                depends_on=["validate_repo"],
+            )
+        )
+
+        # Step 3: Create worktree (standalone clone for container isolation)
         steps.append(
             WorkflowStep(
                 id="create_worktree",
@@ -223,7 +243,7 @@ class Planner:
                     "repo_name": metadata["repo_name"],
                     "standalone": True,
                 },
-                depends_on=["validate_repo"],
+                depends_on=["validate_auth"],
             )
         )
 

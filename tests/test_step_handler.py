@@ -62,6 +62,7 @@ class TestRealStepHandlerDispatch:
         handler = RealStepHandler(ExecutionContext(backends=_mock_backends()))
         expected = {
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_sandbox",
@@ -313,6 +314,107 @@ class TestCreateWorktreeHandler:
 
         assert result.success is False
         assert "clone for sandbox" in result.message
+
+
+# ---------------------------------------------------------------------------
+# Validate auth handler
+# ---------------------------------------------------------------------------
+
+
+class TestValidateAuthHandler:
+    def _empty_token_store(self, tmp_path):
+        """Create an empty token store for isolated testing."""
+        return TokenStore(path=tmp_path / "empty-tokens.json")
+
+    def test_dry_run_succeeds(self, tmp_path):
+        """In dry-run mode, validate_auth always succeeds."""
+        ctx = ExecutionContext(
+            backends=_mock_backends(),
+            token_store=self._empty_token_store(tmp_path),
+            dry_run=True,
+        )
+        handler = RealStepHandler(ctx)
+        step = WorkflowStep(
+            id="validate_auth",
+            action="validate_auth",
+            params={},
+            depends_on=["validate_repo"],
+        )
+        result = handler.execute(step)
+        assert result.success is True
+
+    def test_succeeds_with_default_token(self, tmp_path):
+        """When a default token exists, validate_auth succeeds via fallback."""
+        store = TokenStore(path=tmp_path / "tokens.json")
+        store.add("_default", "ghp_test123", github_user="testuser")
+        ctx = ExecutionContext(
+            backends=_mock_backends(),
+            token_store=store,
+        )
+        handler = RealStepHandler(ctx)
+        step = WorkflowStep(
+            id="validate_auth",
+            action="validate_auth",
+            params={},
+            depends_on=["validate_repo"],
+        )
+        result = handler.execute(step)
+        assert result.success is True
+
+    def test_fails_with_no_token(self, tmp_path, monkeypatch):
+        """With no token available, validate_auth fails with helpful message."""
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+        store = self._empty_token_store(tmp_path)
+        ctx = ExecutionContext(
+            backends=_mock_backends(),
+            token_store=store,
+        )
+        handler = RealStepHandler(ctx)
+
+        # Mock subprocess to make gh auth token fail
+        import subprocess as sp
+
+        original_run = sp.run
+
+        def mock_run(cmd, **kwargs):
+            if cmd[:3] == ["gh", "auth", "token"]:
+                result = type(
+                    "Result", (), {"returncode": 1, "stdout": "", "stderr": ""}
+                )()
+                return result
+            return original_run(cmd, **kwargs)
+
+        monkeypatch.setattr(sp, "run", mock_run)
+
+        step = WorkflowStep(
+            id="validate_auth",
+            action="validate_auth",
+            params={},
+            depends_on=["validate_repo"],
+        )
+        result = handler.execute(step)
+        assert result.success is False
+        assert "No GitHub token" in result.message
+
+    def test_succeeds_with_env_token(self, tmp_path, monkeypatch):
+        """When GH_TOKEN env var is set, validate_auth succeeds."""
+        monkeypatch.setenv("GH_TOKEN", "ghp_env_token")
+        store = self._empty_token_store(tmp_path)
+        ctx = ExecutionContext(
+            backends=_mock_backends(),
+            token_store=store,
+        )
+        handler = RealStepHandler(ctx)
+        step = WorkflowStep(
+            id="validate_auth",
+            action="validate_auth",
+            params={},
+            depends_on=["validate_repo"],
+        )
+        result = handler.execute(step)
+        assert result.success is True
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1109,7 @@ class TestFullPlanExecution:
         result = executor.run(plan)
 
         assert result.error is None, f"Unexpected error: {result.error}"
-        assert len(result.completed_steps) == 7
+        assert len(result.completed_steps) == 8
         assert result.failed_step is None
 
     def test_container_plan_with_real_handler(self, tmp_path):
@@ -1030,7 +1132,7 @@ class TestFullPlanExecution:
         result = executor.run(plan)
 
         assert result.error is None, f"Unexpected error: {result.error}"
-        assert len(result.completed_steps) == 7
+        assert len(result.completed_steps) == 8
         assert "prepare_container" in result.completed_steps
         assert "prepare_sandbox" not in result.completed_steps
         assert result.failed_step is None

@@ -15,12 +15,12 @@ class TestPlannerInput:
 
 
 class TestPlanner:
-    def test_sandbox_mode_creates_seven_steps(self):
+    def test_sandbox_mode_creates_eight_steps(self):
         planner = Planner()
         plan = planner.create_plan(
             PlannerInput(repo="/test/repo", task="implement feature")
         )
-        assert len(plan.steps) == 7
+        assert len(plan.steps) == 8
 
     def test_sandbox_mode_step_actions(self):
         planner = Planner()
@@ -30,6 +30,7 @@ class TestPlanner:
         actions = [s.action for s in plan.steps]
         assert actions == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_sandbox",
@@ -47,6 +48,7 @@ class TestPlanner:
         ids = [s.id for s in order]
         assert ids == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_sandbox",
@@ -75,12 +77,12 @@ class TestPlanner:
             "start_agent",
         ]
 
-    def test_container_target_creates_seven_steps(self):
+    def test_container_target_creates_eight_steps(self):
         planner = Planner()
         plan = planner.create_plan(
             PlannerInput(repo="/test/repo", task="test", target="container")
         )
-        assert len(plan.steps) == 7
+        assert len(plan.steps) == 8
 
     def test_container_target_uses_prepare_container(self):
         planner = Planner()
@@ -90,6 +92,7 @@ class TestPlanner:
         actions = [s.action for s in plan.steps]
         assert actions == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_container",

@@ -32,6 +32,7 @@ class ExecutionContext:
     step_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     verbosity: Verbosity = Verbosity.normal
     token_store: TokenStore = field(default_factory=TokenStore)
+    dry_run: bool = False
 
 
 class RealStepHandler:
@@ -41,6 +42,7 @@ class RealStepHandler:
         self._context = context
         self._dispatch: dict[str, Callable[[WorkflowStep], StepResult]] = {
             "validate_repo": self._handle_validate_repo,
+            "validate_auth": self._handle_validate_auth,
             "create_worktree": self._handle_create_worktree,
             "prepare_template": self._handle_prepare_template,
             "prepare_sandbox": self._handle_prepare_sandbox,
@@ -106,6 +108,53 @@ class RealStepHandler:
             success=False,
             step_id=step.id,
             message=f"Repository not found: {repo}",
+        )
+
+    def _handle_validate_auth(self, step: WorkflowStep) -> StepResult:
+        """Validate auth before expensive operations (clone, sandbox creation).
+
+        Checks that a token can be resolved for the target repo. Fails fast
+        with an actionable message if the repo belongs to an org that requires
+        an explicit token.
+        """
+        if self._context.dry_run:
+            return StepResult(success=True, step_id=step.id)
+
+        store = self._context.token_store
+
+        # Try to identify the repo from validate_repo output
+        validate_output = self._context.step_outputs.get("validate_repo")
+        if validate_output:
+            repo_path = Path(validate_output["repo_path"])
+            repo_id = self._get_repo_identifier(repo_path)
+            if repo_id:
+                result = store.resolve(repo_id)
+                if result.source == "org_requires_explicit":
+                    return StepResult(
+                        success=False,
+                        step_id=step.id,
+                        message=(
+                            f"No token configured for org repo '{repo_id}'. "
+                            f"Run: superintendent token add {repo_id}"
+                        ),
+                    )
+                if result.token:
+                    return StepResult(success=True, step_id=step.id)
+
+        # Fall back to full token resolution chain
+        token = self._resolve_token()
+        if token:
+            return StepResult(success=True, step_id=step.id)
+
+        return StepResult(
+            success=False,
+            step_id=step.id,
+            message=(
+                "No GitHub token available. Options:\n"
+                "  1. superintendent token set-default (for personal repos)\n"
+                "  2. superintendent token add <owner/repo> (for org repos)\n"
+                "  3. gh auth login (GitHub CLI)"
+            ),
         )
 
     def _handle_create_worktree(self, step: WorkflowStep) -> StepResult:
