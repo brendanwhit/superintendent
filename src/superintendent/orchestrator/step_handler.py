@@ -522,18 +522,14 @@ class RealStepHandler:
         task = step.params.get("task", "")
         autonomous = step.params.get("mode") == "autonomous"
 
-        # Inject context file content into the prompt
+        # Point the agent at the context file persisted in .ralph/
         context_file = step.params.get("context_file")
         if context_file:
-            src = Path(context_file).expanduser()
-            if src.is_file():
-                context_content = src.read_text()
-                task = (
-                    f"{task}\n\n"
-                    f"--- CONTEXT FILE: {src.name} ---\n"
-                    f"{context_content}\n"
-                    f"--- END CONTEXT FILE ---"
-                )
+            task = (
+                f"{task}\n\n"
+                "A context file with detailed instructions has been saved to "
+                ".ralph/context.md in your workspace. Read it before starting work."
+            )
 
         task = self._enrich_prompt(task, autonomous)
 

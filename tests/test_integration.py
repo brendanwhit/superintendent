@@ -248,9 +248,11 @@ class TestSandboxFlowIntegration:
         assert len(docker.agents_run) == 1
         _, agent_prompt, _, _ = docker.agents_run[0]
         assert "do the thing" in agent_prompt
-        assert "Step 1: Do the thing" in agent_prompt
+        assert ".ralph/context.md" in agent_prompt
+        # Content is NOT inlined — agent reads the file itself
+        assert "Step 1: Do the thing" not in agent_prompt
 
-        # Context file should also be copied to .ralph/
+        # Context file is persisted in .ralph/
         wt_path = Path(ctx.step_outputs["create_worktree"]["worktree_path"])
         ralph_context = wt_path / ".ralph" / "context.md"
         assert ralph_context.exists()
