@@ -47,13 +47,13 @@ class Backends:
     auth: AuthBackend
 
 
-def create_backends(mode: BackendMode) -> Backends:
+def create_backends(mode: BackendMode, stream_output: bool = False) -> Backends:
     """Create all backends for the given execution mode."""
     if mode == BackendMode.REAL:
-        docker = RealDockerBackend()
+        docker = RealDockerBackend(stream_output=stream_output)
         return Backends(
             docker=docker,
-            git=RealGitBackend(),
+            git=RealGitBackend(stream_output=stream_output),
             terminal=detect_terminal(),
             auth=RealAuthBackend(docker=docker),
         )

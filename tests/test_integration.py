@@ -29,17 +29,31 @@ def _mock_backends(**overrides) -> Backends:
     )
 
 
+def _test_token_store(tmp_path: Path) -> TokenStore:
+    """Create a token store with a default token for deterministic testing.
+
+    Integration tests for sandbox/container flows need validate_auth to pass,
+    which requires a resolvable token. This avoids depending on host-level
+    gh auth or environment variables.
+    """
+    store = TokenStore(path=tmp_path / "test-tokens.json")
+    store.add("_default", "ghp_test_default_token", github_user="testuser")
+    return store
+
+
 class TestSandboxFlowIntegration:
     """Full sandbox workflow: planner -> executor -> mock backends."""
 
-    def test_sandbox_plan_completes_all_seven_steps(self, tmp_path: Path) -> None:
-        """A sandbox plan creates 7 steps and all complete successfully."""
+    def test_sandbox_plan_completes_all_eight_steps(self, tmp_path: Path) -> None:
+        """A sandbox plan creates 8 steps and all complete successfully."""
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         auth = MockAuthBackend()
         backends = _mock_backends(git=git, docker=docker, auth=auth)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -47,7 +61,8 @@ class TestSandboxFlowIntegration:
         result = executor.run(plan)
 
         assert result.error is None
-        assert len(result.completed_steps) == 7
+        assert len(result.completed_steps) == 8
+        assert "validate_auth" in result.completed_steps
         assert "prepare_template" in result.completed_steps
         assert result.failed_step is None
         assert result.state == WorkflowState.AGENT_RUNNING
@@ -57,7 +72,9 @@ class TestSandboxFlowIntegration:
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -71,7 +88,9 @@ class TestSandboxFlowIntegration:
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -91,7 +110,9 @@ class TestSandboxFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -109,7 +130,9 @@ class TestSandboxFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -128,7 +151,9 @@ class TestSandboxFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -140,21 +165,22 @@ class TestSandboxFlowIntegration:
         assert sandbox_name.startswith("claude-")
 
     def test_sandbox_flow_authenticates(self, tmp_path: Path) -> None:
-        """The authenticate step calls auth.setup_git_auth when no token available."""
+        """The authenticate step calls auth.inject_token or setup_git_auth."""
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         auth = MockAuthBackend()
         backends = _mock_backends(git=git, auth=auth)
-        # Use isolated token store so no real tokens are found
-        empty_store = TokenStore(path=tmp_path / "empty-tokens.json")
-        ctx = ExecutionContext(backends=backends, token_store=empty_store)
+        # Use token store with default token so validate_auth passes
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
         plan = Planner().create_plan(PlannerInput(repo=str(repo_path), task="fix bug"))
         executor.run(plan)
 
-        # Without a token, falls back to setup_git_auth (or inject_token from host gh)
+        # With a stored token, inject_token is called during authenticate
         assert len(auth.git_auths) + len(auth.tokens_injected) >= 1
 
     def test_sandbox_flow_initializes_ralph_state(self, tmp_path: Path) -> None:
@@ -162,7 +188,9 @@ class TestSandboxFlowIntegration:
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -178,7 +206,9 @@ class TestSandboxFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -188,7 +218,45 @@ class TestSandboxFlowIntegration:
         assert len(docker.agents_run) == 1
         agent_sandbox, agent_prompt, _, _ = docker.agents_run[0]
         assert agent_sandbox.startswith("claude-")
-        assert agent_prompt == "fix bug"
+        assert "fix bug" in agent_prompt
+        assert "do NOT exit" in agent_prompt
+
+    def test_context_file_injected_into_agent_prompt(self, tmp_path: Path) -> None:
+        """The context file content is injected into the agent prompt."""
+        repo_path = tmp_path / "my-repo"
+        context_file = tmp_path / "plan.md"
+        context_file.write_text("# Plan\n\nStep 1: Do the thing\n")
+
+        git = MockGitBackend(local_repos={str(repo_path): repo_path})
+        docker = MockDockerBackend()
+        backends = _mock_backends(git=git, docker=docker)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
+        handler = RealStepHandler(ctx)
+        executor = Executor(handler=handler)
+
+        plan = Planner().create_plan(
+            PlannerInput(
+                repo=str(repo_path),
+                task="do the thing",
+                context_file=str(context_file),
+            )
+        )
+        executor.run(plan)
+
+        assert len(docker.agents_run) == 1
+        _, agent_prompt, _, _ = docker.agents_run[0]
+        assert "do the thing" in agent_prompt
+        assert ".ralph/context.md" in agent_prompt
+        # Content is NOT inlined — agent reads the file itself
+        assert "Step 1: Do the thing" not in agent_prompt
+
+        # Context file is persisted in .ralph/
+        wt_path = Path(ctx.step_outputs["create_worktree"]["worktree_path"])
+        ralph_context = wt_path / ".ralph" / "context.md"
+        assert ralph_context.exists()
+        assert "Step 1: Do the thing" in ralph_context.read_text()
 
     def test_sandbox_custom_sandbox_name(self, tmp_path: Path) -> None:
         """A custom sandbox_name is passed through to docker operations."""
@@ -196,7 +264,9 @@ class TestSandboxFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -279,13 +349,15 @@ class TestLocalFlowIntegration:
 class TestContainerFlowIntegration:
     """Full container workflow: planner -> executor -> mock backends."""
 
-    def test_container_plan_completes_seven_steps(self, tmp_path: Path) -> None:
-        """A container plan creates 7 steps and all complete successfully."""
+    def test_container_plan_completes_eight_steps(self, tmp_path: Path) -> None:
+        """A container plan creates 8 steps and all complete successfully."""
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -295,7 +367,8 @@ class TestContainerFlowIntegration:
         result = executor.run(plan)
 
         assert result.error is None
-        assert len(result.completed_steps) == 7
+        assert len(result.completed_steps) == 8
+        assert "validate_auth" in result.completed_steps
         assert "prepare_template" in result.completed_steps
         assert result.state == WorkflowState.AGENT_RUNNING
 
@@ -304,7 +377,9 @@ class TestContainerFlowIntegration:
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -327,7 +402,9 @@ class TestContainerFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -348,9 +425,10 @@ class TestContainerFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         auth = MockAuthBackend()
         backends = _mock_backends(git=git, auth=auth)
-        # Use isolated token store so no real tokens are found
-        empty_store = TokenStore(path=tmp_path / "empty-tokens.json")
-        ctx = ExecutionContext(backends=backends, token_store=empty_store)
+        # Use token store with default token so validate_auth passes
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -359,7 +437,7 @@ class TestContainerFlowIntegration:
         )
         executor.run(plan)
 
-        # Auth was called (either setup_git_auth or inject_token from host gh)
+        # With a stored token, inject_token is called during authenticate
         assert len(auth.git_auths) + len(auth.tokens_injected) >= 1
 
     def test_container_flow_runs_agent_with_container_name(
@@ -370,7 +448,9 @@ class TestContainerFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -388,7 +468,9 @@ class TestContainerFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -412,7 +494,9 @@ class TestContainerFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend(containers={"claude-my-repo": True})
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -436,7 +520,9 @@ class TestContainerFlowIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend(fail_on="create_container")
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -449,6 +535,7 @@ class TestContainerFlowIntegration:
         assert result.failed_step == "prepare_container"
         assert result.completed_steps == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
         ]
@@ -463,7 +550,9 @@ class TestBeadsInitIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -482,7 +571,9 @@ class TestBeadsInitIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -516,7 +607,9 @@ class TestBeadsInitIntegration:
 
         docker = CountingDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -530,12 +623,14 @@ class TestBeadsInitIntegration:
 class TestURLRepoIntegration:
     """Integration tests for URL-based repos that need cloning."""
 
-    def test_url_repo_triggers_clone(self) -> None:
+    def test_url_repo_triggers_clone(self, tmp_path: Path) -> None:
         """When repo is a URL and no local clone exists, git.clone is called."""
         git = MockGitBackend()  # no local_repos -> ensure_local returns None
         docker = MockDockerBackend()
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -558,7 +653,9 @@ class TestURLRepoIntegration:
             local_repos={"https://github.com/user/my-repo.git": repo_path}
         )
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -584,7 +681,9 @@ class TestForceRecreationIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend(sandboxes={"claude-my-repo": True})
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -606,7 +705,9 @@ class TestForceRecreationIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend(sandboxes={"claude-my-repo": True})
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -640,7 +741,8 @@ class TestFailurePropagationIntegration:
         assert len(result.completed_steps) == 0
 
     def test_worktree_failure_stops_after_validate(self, tmp_path: Path) -> None:
-        """When create_worktree fails, validate_repo succeeds but execution stops.
+        """When create_worktree fails, validate_repo and validate_auth succeed but
+        execution stops.
 
         For sandbox target (default), clone_for_sandbox is called, so we fail that.
         """
@@ -650,7 +752,9 @@ class TestFailurePropagationIntegration:
             fail_on="clone_for_sandbox",
         )
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -659,7 +763,7 @@ class TestFailurePropagationIntegration:
 
         assert result.state == WorkflowState.FAILED
         assert result.failed_step == "create_worktree"
-        assert result.completed_steps == ["validate_repo"]
+        assert result.completed_steps == ["validate_repo", "validate_auth"]
 
     def test_local_worktree_failure_stops_after_validate(self, tmp_path: Path) -> None:
         """When create_worktree fails in local mode, execution stops after validate."""
@@ -683,12 +787,14 @@ class TestFailurePropagationIntegration:
         assert result.completed_steps == ["validate_repo"]
 
     def test_docker_failure_stops_after_worktree(self, tmp_path: Path) -> None:
-        """When docker.create_sandbox fails, first two steps succeed."""
+        """When docker.create_sandbox fails, first four steps succeed."""
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend(fail_on="create_sandbox")
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -699,41 +805,38 @@ class TestFailurePropagationIntegration:
         assert result.failed_step == "prepare_sandbox"
         assert result.completed_steps == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
         ]
 
     def test_auth_failure_stops_after_sandbox(self, tmp_path: Path) -> None:
-        """When auth fails, first four steps succeed."""
+        """When auth fails, first five steps succeed (including validate_auth)."""
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
-        # Fail both inject_token (used when token found) and setup_git_auth (fallback)
+        # Fail inject_token (used when token found during authenticate step)
         auth = MockAuthBackend(fail_on="inject_token")
         backends = _mock_backends(git=git, auth=auth)
-        # Use isolated token store, but _resolve_token may still find host gh token
-        empty_store = TokenStore(path=tmp_path / "empty-tokens.json")
-        ctx = ExecutionContext(backends=backends, token_store=empty_store)
+        # Use token store with default token so validate_auth passes,
+        # but inject_token fails during the authenticate step
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
         plan = Planner().create_plan(PlannerInput(repo=str(repo_path), task="fix bug"))
         result = executor.run(plan)
 
-        # If host gh token is found, inject_token will fail.
-        # If no token at all, setup_git_auth (not failed) would succeed.
-        # To ensure failure, we need to mock _resolve_token to return a token.
-        if result.state == WorkflowState.FAILED:
-            assert result.failed_step == "authenticate"
-            assert result.completed_steps == [
-                "validate_repo",
-                "create_worktree",
-                "prepare_template",
-                "prepare_sandbox",
-            ]
-        else:
-            # Host has no gh token and no stored token — setup_git_auth succeeded
-            # This is still valid, just a different code path
-            assert "authenticate" in result.completed_steps
+        assert result.state == WorkflowState.FAILED
+        assert result.failed_step == "authenticate"
+        assert result.completed_steps == [
+            "validate_repo",
+            "validate_auth",
+            "create_worktree",
+            "prepare_template",
+            "prepare_sandbox",
+        ]
 
     def test_agent_failure_stops_at_last_step(self, tmp_path: Path) -> None:
         """When docker.run_agent fails, all steps except start_agent succeed."""
@@ -741,7 +844,9 @@ class TestFailurePropagationIntegration:
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         docker = MockDockerBackend(fail_on="run_agent")
         backends = _mock_backends(git=git, docker=docker)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -750,7 +855,7 @@ class TestFailurePropagationIntegration:
 
         assert result.state == WorkflowState.FAILED
         assert result.failed_step == "start_agent"
-        assert len(result.completed_steps) == 6
+        assert len(result.completed_steps) == 7
 
     def test_local_terminal_failure(self, tmp_path: Path) -> None:
         """When terminal.spawn fails in local mode, execution stops at start_agent."""
@@ -812,7 +917,9 @@ class TestStateTransitionsIntegration:
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -859,13 +966,15 @@ class TestStateTransitionsIntegration:
         repo_path = tmp_path / "my-repo"
         git = MockGitBackend(local_repos={str(repo_path): repo_path})
         backends = _mock_backends(git=git)
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(
+            backends=backends, token_store=_test_token_store(tmp_path)
+        )
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
         plan = Planner().create_plan(PlannerInput(repo=str(repo_path), task="fix bug"))
         executor.run(plan)
 
-        assert len(executor.checkpoints) == 7
+        assert len(executor.checkpoints) == 8
         for cp in executor.checkpoints:
             assert cp["success"] is True

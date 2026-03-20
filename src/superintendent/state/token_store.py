@@ -1,6 +1,7 @@
 """Token store for managing scoped GitHub tokens per repository."""
 
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -149,3 +150,37 @@ class TokenStore:
 
         # 3. Owner differs — org repo requires explicit token
         return ResolveResult(token=None, source="org_requires_explicit")
+
+
+def introspect_token_permissions(token: str) -> list[str]:
+    """Query GitHub API to discover actual token permissions.
+
+    For classic tokens, parses the X-OAuth-Scopes response header.
+    Returns a list of scope strings like ["repo", "read:org"].
+    Returns an empty list if introspection fails.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "-sI",
+                "-H",
+                f"Authorization: Bearer {token}",
+                "https://api.github.com/",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return []
+        # Parse X-OAuth-Scopes header from response headers
+        for line in result.stdout.splitlines():
+            if line.lower().startswith("x-oauth-scopes:"):
+                scopes_str = line.split(":", 1)[1].strip()
+                if not scopes_str:
+                    return []
+                return [s.strip() for s in scopes_str.split(",") if s.strip()]
+        return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []

@@ -32,6 +32,7 @@ class ExecutionContext:
     step_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     verbosity: Verbosity = Verbosity.normal
     token_store: TokenStore = field(default_factory=TokenStore)
+    dry_run: bool = False
 
 
 class RealStepHandler:
@@ -41,6 +42,7 @@ class RealStepHandler:
         self._context = context
         self._dispatch: dict[str, Callable[[WorkflowStep], StepResult]] = {
             "validate_repo": self._handle_validate_repo,
+            "validate_auth": self._handle_validate_auth,
             "create_worktree": self._handle_create_worktree,
             "prepare_template": self._handle_prepare_template,
             "prepare_sandbox": self._handle_prepare_sandbox,
@@ -106,6 +108,53 @@ class RealStepHandler:
             success=False,
             step_id=step.id,
             message=f"Repository not found: {repo}",
+        )
+
+    def _handle_validate_auth(self, step: WorkflowStep) -> StepResult:
+        """Validate auth before expensive operations (clone, sandbox creation).
+
+        Checks that a token can be resolved for the target repo. Fails fast
+        with an actionable message if the repo belongs to an org that requires
+        an explicit token.
+        """
+        if self._context.dry_run:
+            return StepResult(success=True, step_id=step.id)
+
+        store = self._context.token_store
+
+        # Try to identify the repo from validate_repo output
+        validate_output = self._context.step_outputs.get("validate_repo")
+        if validate_output:
+            repo_path = Path(validate_output["repo_path"])
+            repo_id = self._get_repo_identifier(repo_path)
+            if repo_id:
+                result = store.resolve(repo_id)
+                if result.source == "org_requires_explicit":
+                    return StepResult(
+                        success=False,
+                        step_id=step.id,
+                        message=(
+                            f"No token configured for org repo '{repo_id}'. "
+                            f"Run: superintendent token add {repo_id}"
+                        ),
+                    )
+                if result.token:
+                    return StepResult(success=True, step_id=step.id)
+
+        # Fall back to full token resolution chain
+        token = self._resolve_token()
+        if token:
+            return StepResult(success=True, step_id=step.id)
+
+        return StepResult(
+            success=False,
+            step_id=step.id,
+            message=(
+                "No GitHub token available. Options:\n"
+                "  1. superintendent token set-default (for personal repos)\n"
+                "  2. superintendent token add <owner/repo> (for org repos)\n"
+                "  3. gh auth login (GitHub CLI)"
+            ),
         )
 
     def _handle_create_worktree(self, step: WorkflowStep) -> StepResult:
@@ -352,6 +401,20 @@ class RealStepHandler:
         ralph_state = RalphState(ralph_dir)
         ralph_state.init(task=task)
 
+        # Copy context file into .ralph/ so it survives reconnection
+        context_file = step.params.get("context_file")
+        if context_file:
+            src = Path(context_file).expanduser()
+            if src.is_file():
+                dest = ralph_dir / "context.md"
+                dest.write_text(src.read_text())
+            else:
+                return StepResult(
+                    success=False,
+                    step_id=step.id,
+                    message=f"Context file not found: {context_file}",
+                )
+
         # Initialize beads with Dolt for sandbox/container targets
         is_sandbox = "prepare_sandbox" in self._context.step_outputs
         is_container = "prepare_container" in self._context.step_outputs
@@ -436,15 +499,38 @@ class RealStepHandler:
             preamble_parts.append(
                 "First, run /notify:notify to enable audio notifications."
             )
-        if not preamble_parts:
-            return task
-        preamble = " ".join(preamble_parts)
-        return f"{preamble}\n\n{task}"
+
+        suffix_parts: list[str] = []
+        if autonomous:
+            suffix_parts.append(
+                "IMPORTANT: When you have finished all tasks, do NOT exit the "
+                "conversation. Instead, summarize what you accomplished and wait "
+                "for the user to review your work. The user may have follow-up "
+                "questions or corrections."
+            )
+
+        parts = []
+        if preamble_parts:
+            parts.append(" ".join(preamble_parts))
+        parts.append(task)
+        if suffix_parts:
+            parts.append("\n".join(suffix_parts))
+        return "\n\n".join(parts)
 
     def _handle_start_agent(self, step: WorkflowStep) -> StepResult:
         env_name = step.params.get("sandbox_name") or step.params.get("container_name")
         task = step.params.get("task", "")
         autonomous = step.params.get("mode") == "autonomous"
+
+        # Point the agent at the context file persisted in .ralph/
+        context_file = step.params.get("context_file")
+        if context_file:
+            task = (
+                f"{task}\n\n"
+                "A context file with detailed instructions has been saved to "
+                ".ralph/context.md in your workspace. Read it before starting work."
+            )
+
         task = self._enrich_prompt(task, autonomous)
 
         wt_output = self._context.step_outputs.get("create_worktree")

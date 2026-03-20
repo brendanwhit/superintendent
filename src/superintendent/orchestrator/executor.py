@@ -1,5 +1,6 @@
 """Executor: runs a WorkflowPlan step by step, managing state transitions."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
@@ -45,6 +46,7 @@ class ExecutionResult:
 # Map from step action to the workflow state entered when running that action.
 _ACTION_TO_STATE: dict[str, WorkflowState] = {
     "validate_repo": WorkflowState.ENSURING_REPO,
+    "validate_auth": WorkflowState.VALIDATING_AUTH,
     "create_worktree": WorkflowState.CREATING_WORKTREE,
     "prepare_template": WorkflowState.PREPARING_TEMPLATE,
     "prepare_sandbox": WorkflowState.PREPARING_SANDBOX,
@@ -58,8 +60,13 @@ _ACTION_TO_STATE: dict[str, WorkflowState] = {
 class Executor:
     """Runs a WorkflowPlan through backends, managing state and checkpoints."""
 
-    def __init__(self, handler: StepHandler | None = None) -> None:
+    def __init__(
+        self,
+        handler: StepHandler | None = None,
+        on_step_start: Callable[[WorkflowStep], None] | None = None,
+    ) -> None:
         self._handler = handler
+        self._on_step_start = on_step_start
         self._state = WorkflowState.INIT
         self._checkpoints: list[dict[str, Any]] = []
 
@@ -150,6 +157,10 @@ class Executor:
                 result.error = str(e)
                 self._state = WorkflowState.FAILED
                 return result
+
+            # Notify listener before execution
+            if self._on_step_start is not None:
+                self._on_step_start(step)
 
             # Execute the step
             step_result = self._handler.execute(step)
