@@ -144,14 +144,10 @@ class TestDryRunSandboxCommands:
         run_cmds = [c for c in docker.commands if "sandbox run" in c]
         assert len(run_cmds) >= 1
         assert "claude-my-repo" in run_cmds[0]
-        # Agent runs inside tmux for terminal resilience
-        tmux_cmds = [c for c in docker.commands if "tmux" in c]
-        assert any("new-session" in c for c in tmux_cmds)
-        assert any("attach" in c for c in tmux_cmds)
-        # Lifecycle wrapper markers present in the tmux command
-        assert any("agent-started" in c for c in tmux_cmds)
-        assert any("agent-exit-code" in c for c in tmux_cmds)
-        assert any("agent-done" in c for c in tmux_cmds)
+        # Lifecycle wrapper markers present
+        assert any("agent-started" in c for c in run_cmds)
+        assert any("agent-exit-code" in c for c in run_cmds)
+        assert any("agent-done" in c for c in run_cmds)
 
 
 class TestDryRunLocalCommands:
@@ -255,8 +251,8 @@ class TestDryRunNoSideEffects:
         docker.run_agent("test", "do stuff")
 
         # Operations recorded as commands but nothing actually ran
-        # run_agent records 3 commands (tmux new-session, set-option, attach)
-        assert len(docker.commands) == 5
+        # run_agent records 1 command (lifecycle-wrapped sandbox run)
+        assert len(docker.commands) == 3
         # sandbox_exists returns False (no real lookup)
         assert docker.sandbox_exists("test") is False
 

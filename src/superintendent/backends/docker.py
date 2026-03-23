@@ -1,6 +1,5 @@
 """DockerBackend protocol and implementations (Real, Mock, DryRun)."""
 
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,7 +152,7 @@ class RealDockerBackend:
         # Wrap with lifecycle markers if .ralph/ exists
         ralph_dir = workspace / ".ralph"
         if ralph_dir.is_dir():
-            run_cmd = (
+            shell_cmd = (
                 f"date -u +%Y-%m-%dT%H:%M:%SZ > {ralph_dir}/agent-started; "
                 f"{agent_cmd}; "
                 f"_exit=$?; echo $_exit > {ralph_dir}/agent-exit-code; "
@@ -161,33 +160,9 @@ class RealDockerBackend:
                 f"exit $_exit"
             )
         else:
-            run_cmd = agent_cmd
+            shell_cmd = agent_cmd
 
-        if not shutil.which("tmux"):
-            return terminal.spawn(run_cmd, workspace)
-
-        # Run inside tmux so the agent survives terminal disconnects.
-        # The terminal window just attaches to the tmux session — if it
-        # closes or crashes, the agent keeps running and you can reattach.
-        session = f"sup-{name}"
-        subprocess.run(
-            ["tmux", "kill-session", "-t", session],
-            capture_output=True,
-        )
-        result = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", session, "sh", "-c", run_cmd],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            # tmux failed — fall back to direct terminal spawn
-            return terminal.spawn(run_cmd, workspace)
-
-        # Keep pane open after command exits so user can see what happened
-        subprocess.run(
-            ["tmux", "set-option", "-t", session, "remain-on-exit", "on"],
-            capture_output=True,
-        )
-        return terminal.spawn(f"tmux attach -t {session}", workspace)
+        return terminal.spawn(shell_cmd, workspace)
 
     def list_sandboxes(self) -> list[str]:
         result = subprocess.run(
@@ -430,22 +405,17 @@ class DryRunDockerBackend:
         cwd: Path | None = None,
     ) -> bool:
         skip = " --dangerously-skip-permissions" if autonomous else ""
-        escaped = prompt.replace("'", "'\\''")
-        agent_cmd = f"docker sandbox run {name} --{skip} {escaped!r}"
-        session = f"sup-{name}"
+        agent_cmd = f"docker sandbox run {name} --{skip} '{prompt}'"
         # Show lifecycle wrapper — in real mode this writes markers to .ralph/
         workspace = cwd or Path(".")
         ralph_dir = workspace / ".ralph"
-        run_cmd = (
+        cmd = (
             f"date -u +%Y-%m-%dT%H:%M:%SZ > {ralph_dir}/agent-started; "
             f"{agent_cmd}; "
             f"_exit=$?; echo $_exit > {ralph_dir}/agent-exit-code; "
             f"date -u +%Y-%m-%dT%H:%M:%SZ > {ralph_dir}/agent-done; "
             f"exit $_exit"
         )
-        self.commands.append(f"tmux new-session -d -s {session} sh -c '{run_cmd}'")
-        self.commands.append(f"tmux set-option -t {session} remain-on-exit on")
-        cmd = f"tmux attach -t {session}"
         if cwd:
             cmd += f"  # cwd={cwd}"
         self.commands.append(cmd)
