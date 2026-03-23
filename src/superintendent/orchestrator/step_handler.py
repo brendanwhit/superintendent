@@ -3,7 +3,6 @@
 import hashlib
 import os
 import re
-import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -176,9 +175,6 @@ class RealStepHandler:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
 
         if standalone:
-            # Standalone clones are disposable — remove stale dir before re-cloning
-            if worktree_path.exists():
-                shutil.rmtree(worktree_path)
             ok = git.clone_for_sandbox(repo_path, worktree_path, branch)
         else:
             ok = git.create_worktree(repo_path, branch, worktree_path)
