@@ -126,6 +126,7 @@ class Planner:
                     "task": inputs.task,
                     "mode": inputs.mode,
                     "context_file": inputs.context_file,
+                    "branch": metadata["branch"],
                 },
                 depends_on=["initialize_state"],
             )
@@ -212,6 +213,7 @@ class Planner:
                     "task": inputs.task,
                     "mode": inputs.mode,
                     "context_file": inputs.context_file,
+                    "branch": metadata["branch"],
                 },
                 depends_on=["initialize_state"],
             )
@@ -298,6 +300,7 @@ class Planner:
                     "task": inputs.task,
                     "mode": inputs.mode,
                     "context_file": inputs.context_file,
+                    "branch": metadata["branch"],
                 },
                 depends_on=["initialize_state"],
             )

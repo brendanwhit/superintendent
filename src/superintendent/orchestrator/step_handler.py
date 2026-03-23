@@ -488,6 +488,77 @@ class RealStepHandler:
         )
         return plugin_dir.exists()
 
+    def _gather_branch_context(self, worktree_path: Path, branch: str) -> str | None:
+        """Gather pre-flight context about the branch state.
+
+        Returns a context string for the agent prompt, or None if there's
+        nothing notable to report (fresh branch with no prior work).
+        """
+        if self._context.dry_run:
+            return None
+
+        git = self._context.backends.git
+        parts: list[str] = []
+
+        # Check for existing commits ahead of default branch
+        default_branch = git.get_default_branch(worktree_path)
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "log",
+                f"origin/{default_branch}..HEAD",
+                "--oneline",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            commits = result.stdout.strip().splitlines()
+            parts.append(
+                f"This branch has {len(commits)} existing commit(s) ahead of "
+                f"{default_branch}. Review them before starting new work:\n"
+                + "\n".join(f"  {c}" for c in commits)
+            )
+
+        # Check for existing PR
+        pr_result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "number,title,url",
+                "--limit",
+                "1",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if pr_result.returncode == 0 and pr_result.stdout.strip() not in ("", "[]"):
+            import json
+
+            try:
+                prs = json.loads(pr_result.stdout)
+                if prs:
+                    pr = prs[0]
+                    parts.append(
+                        f'An open PR already exists: #{pr["number"]} "{pr["title"]}"\n'
+                        f"  {pr['url']}\n"
+                        "Update this PR rather than creating a new one."
+                    )
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        if not parts:
+            return None
+        return "PRE-FLIGHT CONTEXT:\n" + "\n\n".join(parts)
+
     def _enrich_prompt(self, task: str, autonomous: bool) -> str:
         """Add session-setup instructions to the agent prompt."""
         preamble_parts: list[str] = []
@@ -498,6 +569,11 @@ class RealStepHandler:
 
         suffix_parts: list[str] = []
         if autonomous:
+            suffix_parts.append(
+                "IMPORTANT: Run the project's test suite after completing each "
+                "task. Do NOT proceed to the next task if tests fail — fix the "
+                "failure first."
+            )
             suffix_parts.append(
                 "IMPORTANT: When you have finished all tasks, do NOT exit the "
                 "conversation. Instead, summarize what you accomplished and wait "
@@ -517,6 +593,7 @@ class RealStepHandler:
         env_name = step.params.get("sandbox_name") or step.params.get("container_name")
         task = step.params.get("task", "")
         autonomous = step.params.get("mode") == "autonomous"
+        branch = step.params.get("branch", "")
 
         # Point the agent at the context file persisted in .ralph/
         context_file = step.params.get("context_file")
@@ -527,10 +604,16 @@ class RealStepHandler:
                 ".ralph/context.md in your workspace. Read it before starting work."
             )
 
-        task = self._enrich_prompt(task, autonomous)
-
         wt_output = self._context.step_outputs.get("create_worktree")
         worktree_path = Path(wt_output["worktree_path"]) if wt_output else Path.cwd()
+
+        # Gather pre-flight context about existing branch/PR state
+        if branch:
+            branch_context = self._gather_branch_context(worktree_path, branch)
+            if branch_context:
+                task = f"{task}\n\n{branch_context}"
+
+        task = self._enrich_prompt(task, autonomous)
 
         if env_name:
             docker = self._context.backends.docker

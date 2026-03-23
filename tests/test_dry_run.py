@@ -34,7 +34,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_completes_without_errors(self) -> None:
         """Dry-run sandbox flow succeeds end-to-end."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -47,7 +47,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_records_git_commands(self) -> None:
         """Dry-run records git ensure_local and worktree commands."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -66,7 +66,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_records_template_build(self) -> None:
         """Dry-run records docker build command for template."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -85,7 +85,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_records_docker_create(self) -> None:
         """Dry-run records docker sandbox create command."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -101,7 +101,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_records_auth_command(self) -> None:
         """Dry-run records auth setup command."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -117,7 +117,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_records_beads_init_command(self) -> None:
         """Dry-run records beads init exec command (auto-starts Dolt)."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -132,7 +132,7 @@ class TestDryRunSandboxCommands:
     def test_sandbox_flow_records_agent_run(self) -> None:
         """Dry-run records docker sandbox run command for agent."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -156,7 +156,7 @@ class TestDryRunLocalCommands:
     def test_local_flow_completes_without_errors(self) -> None:
         """Dry-run local flow succeeds end-to-end."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -171,7 +171,7 @@ class TestDryRunLocalCommands:
     def test_local_flow_records_no_docker_commands(self) -> None:
         """Local dry-run does not record any docker commands."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -187,7 +187,7 @@ class TestDryRunLocalCommands:
     def test_local_flow_records_no_auth_commands(self) -> None:
         """Local dry-run does not record any auth commands."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -203,7 +203,7 @@ class TestDryRunLocalCommands:
     def test_local_flow_records_terminal_spawn(self) -> None:
         """Local dry-run records terminal spawn command."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -224,7 +224,7 @@ class TestDryRunNoSideEffects:
     def test_dryrun_does_not_create_directories(self, tmp_path: Path) -> None:
         """Dry-run does not create .ralph/ or worktree directories on disk."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -292,7 +292,7 @@ class TestDryRunContainerCommands:
     def test_container_flow_completes_without_errors(self) -> None:
         """Dry-run container flow succeeds end-to-end."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -307,7 +307,7 @@ class TestDryRunContainerCommands:
     def test_container_flow_records_docker_run_not_sandbox_create(self) -> None:
         """Container dry-run records 'docker run' (create_container), not sandbox create."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -327,7 +327,7 @@ class TestDryRunContainerCommands:
     def test_container_flow_records_auth_command(self) -> None:
         """Container dry-run records auth setup command with container name."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -344,7 +344,7 @@ class TestDryRunContainerCommands:
     def test_container_force_records_exists_check(self) -> None:
         """Container with force=True records container_exists check."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -368,7 +368,7 @@ class TestDryRunCustomSandboxName:
     def test_custom_sandbox_name_in_docker_commands(self) -> None:
         """Custom sandbox name appears in docker commands."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -389,7 +389,7 @@ class TestDryRunCustomSandboxName:
     def test_custom_sandbox_name_in_auth_commands(self) -> None:
         """Custom sandbox name appears in auth commands."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -413,7 +413,7 @@ class TestDryRunURLRepo:
     def test_url_repo_records_ensure_local(self) -> None:
         """DryRunGitBackend.ensure_local returns a Path for the URL."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -439,7 +439,7 @@ class TestDryRunForceFlag:
     def test_force_records_sandbox_exists_check(self) -> None:
         """With force=True, dry-run checks if sandbox exists."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -457,7 +457,7 @@ class TestDryRunForceFlag:
     def test_force_still_creates_sandbox(self) -> None:
         """With force=True, dry-run still records sandbox creation."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -479,7 +479,7 @@ class TestDryRunCommandContent:
     def test_git_clone_for_sandbox_command_format(self) -> None:
         """Sandbox target uses clone_for_sandbox commands with branch and target."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -503,7 +503,7 @@ class TestDryRunCommandContent:
     def test_git_worktree_command_format_local(self) -> None:
         """Local target uses regular worktree add command."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -527,7 +527,7 @@ class TestDryRunCommandContent:
     def test_docker_create_command_includes_workspace(self) -> None:
         """Docker create command includes workspace path as positional arg."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -545,7 +545,7 @@ class TestDryRunCommandContent:
     def test_auth_command_references_sandbox(self) -> None:
         """Auth setup command includes the sandbox name."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
@@ -561,7 +561,7 @@ class TestDryRunCommandContent:
     def test_agent_run_command_includes_prompt(self) -> None:
         """Docker run agent command includes the task prompt."""
         backends = _dryrun_backends()
-        ctx = ExecutionContext(backends=backends)
+        ctx = ExecutionContext(backends=backends, dry_run=True)
         handler = RealStepHandler(ctx)
         executor = Executor(handler=handler)
 
