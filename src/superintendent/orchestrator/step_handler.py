@@ -3,7 +3,6 @@
 import hashlib
 import os
 import re
-import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,6 +31,7 @@ class ExecutionContext:
     step_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     verbosity: Verbosity = Verbosity.normal
     token_store: TokenStore = field(default_factory=TokenStore)
+    dry_run: bool = False
 
 
 class RealStepHandler:
@@ -41,6 +41,7 @@ class RealStepHandler:
         self._context = context
         self._dispatch: dict[str, Callable[[WorkflowStep], StepResult]] = {
             "validate_repo": self._handle_validate_repo,
+            "validate_auth": self._handle_validate_auth,
             "create_worktree": self._handle_create_worktree,
             "prepare_template": self._handle_prepare_template,
             "prepare_sandbox": self._handle_prepare_sandbox,
@@ -108,6 +109,53 @@ class RealStepHandler:
             message=f"Repository not found: {repo}",
         )
 
+    def _handle_validate_auth(self, step: WorkflowStep) -> StepResult:
+        """Validate auth before expensive operations (clone, sandbox creation).
+
+        Checks that a token can be resolved for the target repo. Fails fast
+        with an actionable message if the repo belongs to an org that requires
+        an explicit token.
+        """
+        if self._context.dry_run:
+            return StepResult(success=True, step_id=step.id)
+
+        store = self._context.token_store
+
+        # Try to identify the repo from validate_repo output
+        validate_output = self._context.step_outputs.get("validate_repo")
+        if validate_output:
+            repo_path = Path(validate_output["repo_path"])
+            repo_id = self._get_repo_identifier(repo_path)
+            if repo_id:
+                result = store.resolve(repo_id)
+                if result.source == "org_requires_explicit":
+                    return StepResult(
+                        success=False,
+                        step_id=step.id,
+                        message=(
+                            f"No token configured for org repo '{repo_id}'. "
+                            f"Run: superintendent token add {repo_id}"
+                        ),
+                    )
+                if result.token:
+                    return StepResult(success=True, step_id=step.id)
+
+        # Fall back to full token resolution chain
+        token = self._resolve_token()
+        if token:
+            return StepResult(success=True, step_id=step.id)
+
+        return StepResult(
+            success=False,
+            step_id=step.id,
+            message=(
+                "No GitHub token available. Options:\n"
+                "  1. superintendent token set-default (for personal repos)\n"
+                "  2. superintendent token add <owner/repo> (for org repos)\n"
+                "  3. gh auth login (GitHub CLI)"
+            ),
+        )
+
     def _handle_create_worktree(self, step: WorkflowStep) -> StepResult:
         validate_output = self._context.step_outputs.get("validate_repo")
         if validate_output is None:
@@ -127,9 +175,6 @@ class RealStepHandler:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
 
         if standalone:
-            # Standalone clones are disposable — remove stale dir before re-cloning
-            if worktree_path.exists():
-                shutil.rmtree(worktree_path)
             ok = git.clone_for_sandbox(repo_path, worktree_path, branch)
         else:
             ok = git.create_worktree(repo_path, branch, worktree_path)
@@ -352,6 +397,20 @@ class RealStepHandler:
         ralph_state = RalphState(ralph_dir)
         ralph_state.init(task=task)
 
+        # Copy context file into .ralph/ so it survives reconnection
+        context_file = step.params.get("context_file")
+        if context_file:
+            src = Path(context_file).expanduser()
+            if src.is_file():
+                dest = ralph_dir / "context.md"
+                dest.write_text(src.read_text())
+            else:
+                return StepResult(
+                    success=False,
+                    step_id=step.id,
+                    message=f"Context file not found: {context_file}",
+                )
+
         # Initialize beads with Dolt for sandbox/container targets
         is_sandbox = "prepare_sandbox" in self._context.step_outputs
         is_container = "prepare_container" in self._context.step_outputs
@@ -429,6 +488,77 @@ class RealStepHandler:
         )
         return plugin_dir.exists()
 
+    def _gather_branch_context(self, worktree_path: Path, branch: str) -> str | None:
+        """Gather pre-flight context about the branch state.
+
+        Returns a context string for the agent prompt, or None if there's
+        nothing notable to report (fresh branch with no prior work).
+        """
+        if self._context.dry_run:
+            return None
+
+        git = self._context.backends.git
+        parts: list[str] = []
+
+        # Check for existing commits ahead of default branch
+        default_branch = git.get_default_branch(worktree_path)
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree_path),
+                "log",
+                f"origin/{default_branch}..HEAD",
+                "--oneline",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            commits = result.stdout.strip().splitlines()
+            parts.append(
+                f"This branch has {len(commits)} existing commit(s) ahead of "
+                f"{default_branch}. Review them before starting new work:\n"
+                + "\n".join(f"  {c}" for c in commits)
+            )
+
+        # Check for existing PR
+        pr_result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "number,title,url",
+                "--limit",
+                "1",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if pr_result.returncode == 0 and pr_result.stdout.strip() not in ("", "[]"):
+            import json
+
+            try:
+                prs = json.loads(pr_result.stdout)
+                if prs:
+                    pr = prs[0]
+                    parts.append(
+                        f'An open PR already exists: #{pr["number"]} "{pr["title"]}"\n'
+                        f"  {pr['url']}\n"
+                        "Update this PR rather than creating a new one."
+                    )
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        if not parts:
+            return None
+        return "PRE-FLIGHT CONTEXT:\n" + "\n\n".join(parts)
+
     def _enrich_prompt(self, task: str, autonomous: bool) -> str:
         """Add session-setup instructions to the agent prompt."""
         preamble_parts: list[str] = []
@@ -436,19 +566,54 @@ class RealStepHandler:
             preamble_parts.append(
                 "First, run /notify:notify to enable audio notifications."
             )
-        if not preamble_parts:
-            return task
-        preamble = " ".join(preamble_parts)
-        return f"{preamble}\n\n{task}"
+
+        suffix_parts: list[str] = []
+        if autonomous:
+            suffix_parts.append(
+                "IMPORTANT: Run the project's test suite after completing each "
+                "task. Do NOT proceed to the next task if tests fail — fix the "
+                "failure first."
+            )
+            suffix_parts.append(
+                "IMPORTANT: When you have finished all tasks, do NOT exit the "
+                "conversation. Instead, summarize what you accomplished and wait "
+                "for the user to review your work. The user may have follow-up "
+                "questions or corrections."
+            )
+
+        parts = []
+        if preamble_parts:
+            parts.append(" ".join(preamble_parts))
+        parts.append(task)
+        if suffix_parts:
+            parts.append("\n".join(suffix_parts))
+        return "\n\n".join(parts)
 
     def _handle_start_agent(self, step: WorkflowStep) -> StepResult:
         env_name = step.params.get("sandbox_name") or step.params.get("container_name")
         task = step.params.get("task", "")
         autonomous = step.params.get("mode") == "autonomous"
-        task = self._enrich_prompt(task, autonomous)
+        branch = step.params.get("branch", "")
+
+        # Point the agent at the context file persisted in .ralph/
+        context_file = step.params.get("context_file")
+        if context_file:
+            task = (
+                f"{task}\n\n"
+                "A context file with detailed instructions has been saved to "
+                ".ralph/context.md in your workspace. Read it before starting work."
+            )
 
         wt_output = self._context.step_outputs.get("create_worktree")
         worktree_path = Path(wt_output["worktree_path"]) if wt_output else Path.cwd()
+
+        # Gather pre-flight context about existing branch/PR state
+        if branch:
+            branch_context = self._gather_branch_context(worktree_path, branch)
+            if branch_context:
+                task = f"{task}\n\n{branch_context}"
+
+        task = self._enrich_prompt(task, autonomous)
 
         if env_name:
             docker = self._context.backends.docker

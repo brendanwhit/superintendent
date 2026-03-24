@@ -51,9 +51,10 @@ class TestExecutor:
         assert result.state == WorkflowState.AGENT_RUNNING
         assert result.failed_step is None
         assert result.error is None
-        assert len(result.completed_steps) == 7
+        assert len(result.completed_steps) == 8
         assert result.completed_steps == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_sandbox",
@@ -71,9 +72,10 @@ class TestExecutor:
         assert result.state == WorkflowState.AGENT_RUNNING
         assert result.failed_step is None
         assert result.error is None
-        assert len(result.completed_steps) == 7
+        assert len(result.completed_steps) == 8
         assert result.completed_steps == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_container",
@@ -101,6 +103,7 @@ class TestExecutor:
         assert result.failed_step == "prepare_container"
         assert result.completed_steps == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
         ]
@@ -125,6 +128,7 @@ class TestExecutor:
         assert "Simulated failure" in result.error
         assert result.completed_steps == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
         ]
@@ -147,6 +151,7 @@ class TestExecutor:
 
         assert handler.executed == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_sandbox",
@@ -163,6 +168,7 @@ class TestExecutor:
 
         assert handler.executed == [
             "validate_repo",
+            "validate_auth",
             "create_worktree",
             "prepare_template",
             "prepare_sandbox",
@@ -199,7 +205,7 @@ class TestExecutor:
 
         assert "validate_repo" in result.step_results
         assert result.step_results["validate_repo"].success is True
-        assert len(result.step_results) == 7
+        assert len(result.step_results) == 8
 
     def test_step_results_on_failure(self):
         handler = MockHandler(fail_on="authenticate")
@@ -208,7 +214,7 @@ class TestExecutor:
         result = executor.run(plan)
 
         assert result.step_results["authenticate"].success is False
-        assert len(result.step_results) == 5
+        assert len(result.step_results) == 6
 
     def test_checkpoints_saved(self):
         handler = MockHandler()
@@ -216,7 +222,7 @@ class TestExecutor:
         plan = self._sandbox_plan()
         executor.run(plan)
 
-        assert len(executor.checkpoints) == 7
+        assert len(executor.checkpoints) == 8
         assert executor.checkpoints[0]["step_id"] == "validate_repo"
         assert executor.checkpoints[0]["success"] is True
         assert "timestamp" in executor.checkpoints[0]

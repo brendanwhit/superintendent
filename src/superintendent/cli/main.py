@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -19,7 +20,7 @@ import typer
 from superintendent.backends.factory import BackendMode, create_backends
 from superintendent.backends.git import DEFAULT_STALE_DAYS, GitBackend, RealGitBackend
 from superintendent.orchestrator.executor import Executor
-from superintendent.orchestrator.models import Mode, Target, Verbosity
+from superintendent.orchestrator.models import Mode, Target, Verbosity, WorkflowStep
 from superintendent.orchestrator.planner import Planner, PlannerInput
 from superintendent.orchestrator.repo_info import RepoInfo
 from superintendent.orchestrator.step_handler import (
@@ -29,7 +30,23 @@ from superintendent.orchestrator.step_handler import (
 )
 from superintendent.orchestrator.strategy import ExecutionStrategy, TaskInfo
 from superintendent.state.registry import WorktreeEntry, WorktreeRegistry
-from superintendent.state.token_store import DEFAULT_KEY, TokenStore
+from superintendent.state.token_store import (
+    DEFAULT_KEY,
+    TokenStore,
+    introspect_token_permissions,
+)
+
+_STEP_LABELS: dict[str, str] = {
+    "validate_repo": "Validating repository...",
+    "validate_auth": "Checking authentication...",
+    "create_worktree": "Cloning repository...",
+    "prepare_template": "Building sandbox template...",
+    "prepare_sandbox": "Creating sandbox...",
+    "prepare_container": "Creating container...",
+    "authenticate": "Configuring authentication...",
+    "initialize_state": "Initializing workspace...",
+    "start_agent": "Starting agent...",
+}
 
 app = typer.Typer(name="superintendent", no_args_is_help=True)
 token_app = typer.Typer(name="token", help="Manage scoped GitHub tokens.")
@@ -415,14 +432,24 @@ def run(
 
     planner = Planner()
 
+    stream = verbosity != Verbosity.quiet
     if dry_run:
         backends = create_backends(BackendMode.DRYRUN)
     else:
-        backends = create_backends(BackendMode.REAL)
+        backends = create_backends(BackendMode.REAL, stream_output=stream)
 
-    context = ExecutionContext(backends=backends, verbosity=verbosity)
+    context = ExecutionContext(backends=backends, verbosity=verbosity, dry_run=dry_run)
     handler = RealStepHandler(context)
-    executor = Executor(handler=handler)
+
+    def _on_step_start(step: WorkflowStep) -> None:
+        if verbosity != Verbosity.quiet:
+            label = _STEP_LABELS.get(step.action, f"Running {step.action}...")
+            typer.echo(label)
+
+    executor = Executor(
+        handler=handler,
+        on_step_start=None if dry_run else _on_step_start,
+    )
 
     planner_input = PlannerInput(
         repo=repo,
@@ -612,8 +639,13 @@ def token_add(
     if existing is not None:
         typer.echo(f"Token already exists for {repo}. Use 'token update' to replace.")
         raise typer.Exit(code=1)
-    store.add(repo, token, permissions=permissions or [])
+    # Introspect actual permissions from GitHub API
+    discovered = introspect_token_permissions(token)
+    effective_perms = permissions if permissions else discovered
+    store.add(repo, token, permissions=effective_perms)
     typer.echo(f"Token added for {repo}")
+    if discovered:
+        typer.echo(f"  Discovered permissions: {', '.join(discovered)}")
 
 
 @token_app.command("update")
@@ -632,8 +664,15 @@ def token_update(
     if existing is None:
         typer.echo(f"No token found for {repo}. Use 'token add' first.")
         raise typer.Exit(code=1)
-    store.add(repo, token, permissions=permissions or existing.permissions)
+    # Introspect actual permissions from GitHub API
+    discovered = introspect_token_permissions(token)
+    effective_perms = (
+        permissions if permissions else (discovered or existing.permissions)
+    )
+    store.add(repo, token, permissions=effective_perms)
     typer.echo(f"Token updated for {repo}")
+    if discovered:
+        typer.echo(f"  Discovered permissions: {', '.join(discovered)}")
 
 
 @token_app.command("remove")
@@ -720,6 +759,125 @@ def token_status() -> None:
             typer.echo(
                 f"  {key}: {masked} (created: {entry.created_at}, permissions: {perms})"
             )
+
+
+def _read_marker(path: Path) -> str | None:
+    """Read a lifecycle marker file, returning stripped content or None."""
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds into a human-readable duration string."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    remaining = minutes % 60
+    if remaining:
+        return f"{hours}h {remaining}m"
+    return f"{hours}h"
+
+
+def _time_ago(iso_timestamp: str) -> str:
+    """Format an ISO timestamp as a human-readable 'ago' string."""
+    try:
+        ts = datetime.fromisoformat(iso_timestamp).replace(tzinfo=UTC)
+        delta = datetime.now(UTC) - ts
+        return f"{_format_duration(delta.total_seconds())} ago"
+    except (ValueError, TypeError):
+        return iso_timestamp
+
+
+def check_agent_status(entry: WorktreeEntry) -> tuple[str, dict[str, str]]:
+    """Determine agent state from .ralph/ markers.
+
+    Returns (status_string, details_dict) where details may include
+    start_time, end_time, exit_code, and duration.
+    """
+    details: dict[str, str] = {}
+
+    worktree = Path(entry.worktree_path)
+    ralph_dir = worktree / ".ralph"
+
+    if not ralph_dir.is_dir():
+        return ("not_started", details)
+
+    started = _read_marker(ralph_dir / "agent-started")
+    done = _read_marker(ralph_dir / "agent-done")
+    exit_code = _read_marker(ralph_dir / "agent-exit-code")
+
+    if not started:
+        return ("not_started", details)
+
+    details["start_time"] = started
+
+    if done:
+        details["end_time"] = done
+        if exit_code is not None:
+            details["exit_code"] = exit_code
+        # Compute duration
+        try:
+            t_start = datetime.fromisoformat(started).replace(tzinfo=UTC)
+            t_end = datetime.fromisoformat(done).replace(tzinfo=UTC)
+            details["duration"] = _format_duration((t_end - t_start).total_seconds())
+        except (ValueError, TypeError):
+            pass
+
+        if exit_code == "0":
+            return ("completed", details)
+        return ("failed", details)
+
+    # Started but not done — agent is still running (or was killed)
+    return ("running", details)
+
+
+def _format_status_line(name: str, status: str, details: dict[str, str]) -> str:
+    """Format a single status line for display."""
+    info_parts: list[str] = []
+    if status == "running" and "start_time" in details:
+        info_parts.append(f"started {_time_ago(details['start_time'])}")
+    elif status in ("completed", "failed"):
+        if "exit_code" in details:
+            info_parts.append(f"exit {details['exit_code']}")
+        if "duration" in details:
+            info_parts.append(f"ran {details['duration']}")
+        if "end_time" in details:
+            info_parts.append(f"ended {_time_ago(details['end_time'])}")
+    info = f"  ({', '.join(info_parts)})" if info_parts else ""
+    return f"{name}:  {status}{info}"
+
+
+@app.command()
+def status(
+    name: str | None = typer.Option(None, help="Filter by entry name."),
+) -> None:
+    """Show agent lifecycle status for registered entries."""
+    registry = get_default_registry()
+    entries = registry.list_all()
+
+    if not entries:
+        typer.echo("No entries found.")
+        return
+
+    if name:
+        entries = [e for e in entries if e.name == name]
+        if not entries:
+            typer.echo(f"No entry found with name '{name}'", err=True)
+            raise typer.Exit(code=1)
+
+    for entry in entries:
+        worktree = Path(entry.worktree_path)
+        if not worktree.exists():
+            typer.echo(f"{entry.name}:  no sandbox")
+            continue
+
+        agent_status, details = check_agent_status(entry)
+        typer.echo(_format_status_line(entry.name, agent_status, details))
 
 
 if __name__ == "__main__":

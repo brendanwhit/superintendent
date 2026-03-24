@@ -160,8 +160,13 @@ class GitBackend(Protocol):
 class RealGitBackend:
     """Executes actual git commands via subprocess."""
 
-    def __init__(self, search_paths: list[Path] | None = None) -> None:
+    def __init__(
+        self,
+        search_paths: list[Path] | None = None,
+        stream_output: bool = False,
+    ) -> None:
         self._search_paths = search_paths
+        self._stream_output = stream_output
 
     def clone(self, url: str, path: Path) -> bool:
         result = subprocess.run(
@@ -406,10 +411,43 @@ class RealGitBackend:
         # Get default branch for --branch flag
         default_branch = self.get_default_branch(source)
 
-        # Shallow clone
-        target.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            [
+        # Reuse existing clone if valid, otherwise clone fresh
+        if (target / ".git").is_dir():
+            # Existing clone — fetch latest and reset to default branch
+            fetch_cmd = ["git", "-C", str(target), "fetch", "origin"]
+            if self._stream_output:
+                fetch_cmd.append("--progress")
+                subprocess.run(fetch_cmd, text=True)
+            else:
+                subprocess.run(fetch_cmd, capture_output=True, text=True)
+            # Discard any local changes and move to default branch
+            subprocess.run(
+                ["git", "-C", str(target), "checkout", "-f", default_branch],
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(target),
+                    "reset",
+                    "--hard",
+                    f"origin/{default_branch}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            # Delete the feature branch if it exists locally (will recreate below)
+            subprocess.run(
+                ["git", "-C", str(target), "branch", "-D", branch],
+                capture_output=True,
+                text=True,
+            )
+        else:
+            # Fresh clone
+            target.parent.mkdir(parents=True, exist_ok=True)
+            clone_cmd = [
                 "git",
                 "clone",
                 "--branch",
@@ -419,12 +457,14 @@ class RealGitBackend:
                 "100",
                 remote_url,
                 str(target),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return False
+            ]
+            if self._stream_output:
+                clone_cmd.insert(2, "--progress")
+                result = subprocess.run(clone_cmd, text=True)
+            else:
+                result = subprocess.run(clone_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False
 
         # Reset index for macOS/Linux compatibility
         subprocess.run(
@@ -440,9 +480,17 @@ class RealGitBackend:
             text=True,
         )
         if ls_remote.returncode == 0 and branch in ls_remote.stdout:
-            # Fetch and checkout existing remote branch, then rebase onto default
+            # Fetch with explicit refspec so the remote tracking ref is created
+            # (shallow single-branch clones don't track other branches by default)
             subprocess.run(
-                ["git", "-C", str(target), "fetch", "origin", branch],
+                [
+                    "git",
+                    "-C",
+                    str(target),
+                    "fetch",
+                    "origin",
+                    f"{branch}:refs/remotes/origin/{branch}",
+                ],
                 capture_output=True,
                 text=True,
             )

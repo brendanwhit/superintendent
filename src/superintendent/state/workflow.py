@@ -8,6 +8,7 @@ class WorkflowState(Enum):
 
     INIT = auto()
     ENSURING_REPO = auto()
+    VALIDATING_AUTH = auto()
     CREATING_WORKTREE = auto()
     PREPARING_TEMPLATE = auto()
     PREPARING_SANDBOX = auto()
@@ -25,6 +26,11 @@ class WorkflowState(Enum):
 _TRANSITIONS: dict[WorkflowState, set[WorkflowState]] = {
     WorkflowState.INIT: {WorkflowState.ENSURING_REPO, WorkflowState.FAILED},
     WorkflowState.ENSURING_REPO: {
+        WorkflowState.VALIDATING_AUTH,
+        WorkflowState.CREATING_WORKTREE,
+        WorkflowState.FAILED,
+    },
+    WorkflowState.VALIDATING_AUTH: {
         WorkflowState.CREATING_WORKTREE,
         WorkflowState.FAILED,
     },
@@ -66,6 +72,7 @@ _TRANSITIONS: dict[WorkflowState, set[WorkflowState]] = {
 WORKFLOW_ORDER: list[WorkflowState] = [
     WorkflowState.INIT,
     WorkflowState.ENSURING_REPO,
+    WorkflowState.VALIDATING_AUTH,
     WorkflowState.CREATING_WORKTREE,
     WorkflowState.PREPARING_TEMPLATE,
     WorkflowState.PREPARING_SANDBOX,
